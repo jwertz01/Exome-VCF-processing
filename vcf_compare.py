@@ -29,7 +29,7 @@ def main():
 		'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 'G>C', 'G>T', 'T>A', 'T>C', 'T>G']	
 			
 	init_readers(
-	args.vcf_file_names, counts, in_files, curr_recs, categories, readers)
+		args.vcf_file_names, counts, in_files, curr_recs, categories, readers)
 		
 	with open(args.out_all_variants, 'w') as out_all_variants:
 		out_all_variants.write(
