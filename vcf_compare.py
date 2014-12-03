@@ -13,8 +13,12 @@ def main():
 		'--out_all_variants', type = str, default = 'all_variants.txt')
 	parser.add_argument(
 		'--out_interesting_variants', type = str, 
-		default = 'interesting_variants.txt')	#TODO: Implement this.
+		default = 'interesting_variants.txt')
+	#min quality, depth for inclusion in interesting variants
+	parser.add_argument('--min_qual', type = int, default = 20) 
+	parser.add_argument('--min_depth', type=int, default = 30)
 	parser.add_argument('vcf_file_names', nargs = '+', type = str)
+
 	args = parser.parse_args()
 
 	in_files = []	# input VCF files
@@ -30,12 +34,17 @@ def main():
 			
 	init_readers(
 		args.vcf_file_names, counts, in_files, curr_recs, categories, readers)
-		
-	with open(args.out_all_variants, 'w') as out_all_variants:
-		out_all_variants.write(
-			'Chr\tPos\t' + '\t'.join([z['Filename'] for z in counts]) + '\n')		
+
+	header = (
+		'Chr\tPos\t' + '\t'.join([z['Filename'] for z in counts]) 
+		+ '\t%Y\tAve_GQ\tAve_DP' + '\n')
+	with open(args.out_all_variants, 'w') as out_all_variants, \
+	open(args.out_interesting_variants, 'w') as out_interesting_variants:	
+		out_all_variants.write(header)		
+		out_interesting_variants.write(header)
 		compare_variants(
-			readers, curr_recs, done_readers, out_all_variants, counts)
+			readers, curr_recs, done_readers, out_all_variants, 
+			out_interesting_variants, counts, args.min_qual, args.min_depth)
 
 	for f in in_files:
 		f.close()	
@@ -77,7 +86,8 @@ def init_readers(f_names, counts, in_files, curr_recs, categories, readers):
 
 	
 def compare_variants(
-	readers, curr_recs, done_readers, out_all_variants, counts):
+	readers, curr_recs, done_readers, out_all_variants, 
+	out_interesting_variants, counts, min_qual, min_depth):
 	"""Process variants present in VCF files: Iterate through all files 
 	simultaneously. Write per-file variant info to all_variants output file 
 	and update overall statistics (counts). 
@@ -89,7 +99,12 @@ def compare_variants(
 			Indices of readers that have reached end of file.
 		out_all_variants (text file): 
 			Open output file to write all variants to.
+		out_interesting_variants (text file): 
+			Open output file to write disagreements above min_qual and 
+			min_depth to.
 		counts (list of dicts): Category:count dict per file.
+		min_qual (int): Min GQ score for inclusion in interesting_variants.
+		min_depth (int): Min DP score for inclusion in interesting_variants.
 	"""
 	
 	min_chrom = min_chromosome(
@@ -97,6 +112,7 @@ def compare_variants(
 		if not z in done_readers))
 	print 'Processing ' + min_chrom + '...'
 	while len(done_readers) < len(readers):
+		curr_variant_in_file = []
 		new_min_chrom = min_chromosome(
 			list(curr_recs[z].CHROM for z in xrange(len(curr_recs)) 
 			if not z in done_readers))
@@ -106,12 +122,13 @@ def compare_variants(
 		min_pos = min(
 			curr_recs[w].POS for w in xrange(len(curr_recs)) 
 			if (curr_recs[w].CHROM == min_chrom and not w in done_readers))
-		out_all_variants.write(min_chrom + ' ' + str(min_pos) + '\t')
+		curr_calls = [None] * len(readers)
 		for i, reader in enumerate(readers):
 			if (
 				curr_recs[i].CHROM == min_chrom
 				and curr_recs[i].POS == min_pos and not i in done_readers):
-				out_all_variants.write('Y\t')
+				curr_variant_in_file.append(True)
+				curr_calls[i] = curr_recs[i].genotype(reader.samples[0])
 				try:
 					record = reader.next()
 					update_counts(counts[i], reader, record)
@@ -119,8 +136,72 @@ def compare_variants(
 				except StopIteration:
 					done_readers.append(i)
 			else:
-				out_all_variants.write('N\t')		
-		out_all_variants.write('\n')
+				curr_variant_in_file.append(False)
+
+		output_variant(
+			curr_variant_in_file, curr_recs, curr_calls, out_all_variants,
+			out_interesting_variants, min_qual, min_depth, min_chrom, min_pos)
+
+
+def output_variant(
+	variant_in_file, records, calls, out_all_variants, 
+	out_interesting_variants, min_qual, min_depth, chrom, pos):
+	"""Output a single variant to out_all_variants and out_interesting_variants.
+	
+		Args:
+			variant_in_file (list of bool): True iff file has variant.
+			records (list of vcf.model._Record): Record of variant, per file.
+			calls (list of vcf.model._Call): Variant call, per file.
+			out_all_variants (text file): 
+				Open output file to write all variants to.
+			out_interesting_variants (text file): 
+				Open output file to write disagreements above min_qual and 
+				min_depth to.
+			min_qual (int): Min GQ score for inclusion in interesting_variants.
+			min_depth (int): Min DP score for inclusion in interesting_variants.
+			chrom (string): Chromosome that variant is on.
+			pos (int): Genomic position of variant.
+	"""
+	#high-quality variants that were present in some files and not others
+	high_qual_var_in_file = False
+	variant_in_all_files = True
+	total_gq, count_gq, total_dp, count_dp = 0, 0, 0, 0
+	variant_in_file_str = ''
+	for i in range(len(variant_in_file)):
+		#print records[i] 	Record(CHROM=chr1, POS=900001, REF=G, ALT=[A])
+		#print calls[i]		Call(sample=1463-02-p1-2500rapid, CallData(GT=0/1, AD=[3, 3], DP=6, GQ=82.25, PL=[82, 0, 94]))
+		
+		if variant_in_file[i]:
+			gq = calls[i]['GQ']
+			dp = calls[i]['DP']
+			if gq is not None:
+				total_gq += gq
+				count_gq += 1
+			if dp is not None:
+				total_dp += dp
+				count_dp += 1
+			if (
+				gq is not None and dp is not None and gq >= min_qual and 
+				dp >= min_depth):
+				high_qual_var_in_file = True				
+		else:
+			variant_in_all_files = False
+		if i != 0:
+			variant_in_file_str += '\t' 
+		variant_in_file_str += ('Y' if (variant_in_file[i]) else 'N')
+		
+	percent_y = 100.0 * variant_in_file.count(True) / len(variant_in_file)
+	ave_gq = float(total_gq) / count_gq
+	ave_dp = float(total_dp) / count_dp
+	out_str = (
+		'%s\t%s\t%s\t%.2f\t%.2f\t%.2f\n' % (chrom, str(pos),
+		variant_in_file_str, percent_y, ave_gq, ave_dp))
+		
+	out_all_variants.write(out_str)	
+	
+	if high_qual_var_in_file and not variant_in_all_files:
+		out_interesting_variants.write(out_str)
+
 
 
 def min_chromosome(chroms):
