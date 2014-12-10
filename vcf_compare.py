@@ -26,12 +26,12 @@ def main():
 	curr_recs = [] 	# current record for each file
 	#statistics, in the order in which they will be displayed
 	categories=[
-		'Filename', 'Total variants', 'Variants that pass quality filter',
+		'Filename', 'Total variants', 'High-quality variants',
 		'Homozygous reference', 'SNP', 'Heterozygous', 'Homozygous alternate',
 		'Indel', 'Missing', 'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 
 		'G>C', 'G>T', 'T>A', 'T>C', 'T>G', 'Multi-sample', 'Records skipped',
 		'Variants absent from this file present in other files',
-		'Variants present that conflict with other files']
+		'High-quality variants present that conflict with other files']
 			
 	init_readers(
 		args.vcf_file_names, counts, in_files, curr_recs, categories, readers,
@@ -55,8 +55,8 @@ def main():
 	counts_norm = normalize_counts(categories, counts)
 	with open(args.out_stats, 'w') as out_f:
 		message = (
-			'Note: Normalized with respect to the number of variants that ' +
-			'pass the quality filter, and to the value in the leftmost '+
+			'Note: Normalized with respect to the number of high-quality ' +
+			'variants, and to the value in the leftmost '+
 			'numeric column. Normalized values less than 0.95 or ' +
 			'greater than 1.05 are shown in blue. Counts shown are after ' +
 			'quality filtering.')
@@ -220,7 +220,11 @@ def output_variant(
 			if dp is not None:
 				dict_var_stats[(ref, alt)].total_dp += dp
 				dict_var_stats[(ref, alt)].count_dp += 1				
-			
+	
+	multiple_vars = (
+		len([z for z in dict_var_stats if 'high_qual' in 
+		dict_var_stats[z].in_file]) > 1)
+		
 	#output each (ref, alt) combination at given position on chromosome
 	for x in dict_var_stats:
 		if all (
@@ -240,8 +244,11 @@ def output_variant(
 					#same chrom, pos but different ref/ alt counts as absent.
 					counts[i]['Variants absent from this file ' +
 					'present in other files'] += 1
-					counts[i]['Variants present that conflict ' +
-					'with other files'] += 1
+				if (
+					in_file == 'high_qual' and percent_present not in 
+					[0, 100]):
+					counts[i]['High-quality variants present that ' + 
+					'conflict with other files'] += 1
 		out_str = (
 			'%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\n' % (chrom, 
 			str(pos), ref, alt, variant_in_file_str, percent_present, 
@@ -249,6 +256,7 @@ def output_variant(
 		out_all_variants.write(out_str)	
 		if percent_present not in [0, 100]:
 			out_conflicting_variants.write(out_str)
+
 
 def min_chromosome(chroms):
 	"""Find name of chromosome which would appear first in ordered file.
@@ -281,7 +289,7 @@ def update_counts(counts, reader, record):
 	if counts['Multi-sample']:
 		counts['Records skipped'] += 1
 		return		
-	counts['Variants that pass quality filter'] += 1
+	counts['High-quality variants'] += 1
 	counts['Heterozygous'] += record.num_het
 	counts['Homozygous alternate'] += record.num_hom_alt
 	counts['Homozygous reference'] += record.num_hom_ref
@@ -334,14 +342,14 @@ def normalize_counts(categories, counts):
 		min(i for i in xrange(len(counts)) if not counts[i]['Multi-sample']))
 	counts_norm = [dict(z) for z in counts]
 	for cat in categories:
-		if (
-			all((isinstance(z[cat], int) and (not isinstance(z[cat], bool))
-			and z[cat] == 0) for z in counts)):
-			for f in xrange(len(counts)):
+		min_val = counts[min_index][cat]
+		for f in xrange(len(counts)):
+			if (
+				isinstance(counts[f][cat], int) and (not isinstance(
+				counts[f][cat], bool)) and counts[f][cat] == 0 and
+				all((z[cat] in [0, '--']) for z in counts)):
 				counts_norm[f][cat] = str(counts[f][cat]) + ' (%.2f)' % 1
-		else:
-			min_val = counts[min_index][cat]
-			for f in xrange(len(counts)):	
+			else:
 				if (
 					(not isinstance(counts[f][cat], int)) or (isinstance(
 					counts[f][cat], bool)) or (min_val == 0) or
@@ -349,9 +357,8 @@ def normalize_counts(categories, counts):
 					continue
 				counts_norm[f][cat] = (
 					(counts[f][cat] / float(min_val) * 
-					(float(counts[min_index]['Variants that pass ' +
-					'quality filter']) / 
-					counts[f]['Variants that pass quality filter'])))
+					(float(counts[min_index]['High-quality variants']) / 
+					counts[f]['High-quality variants'])))
 				if (
 					counts_norm[f][cat] < 1.05 and counts_norm[f][cat] 
 					> 0.95):
