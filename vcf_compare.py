@@ -4,127 +4,160 @@ import os
 import sys
 import argparse
 import vcf
+import matplotlib.pyplot as plt
 
 def main():
 	parser = argparse.ArgumentParser()	
+	parser.add_argument('vcf_file_names', nargs = '+', type = str)
 	parser.add_argument('--out_stats', type = str, default = 'vcf_stats.html')
 	parser.add_argument(
-		'--out_all_variants', type = str, default = 'all_variants.txt')
+		'--depth_plot', type = str, default = 'dp_plot.png')
 	parser.add_argument(
-		'--out_conflicting_variants', type = str, 
-		default = 'conflicting_variants.txt')
-	#min quality, depth for inclusion in variant output files
-	parser.add_argument('--min_qd', type = int, default = 3) 
-	parser.add_argument('--min_dp', type = int, default = 20)
-	parser.add_argument('vcf_file_names', nargs = '+', type = str)
+		'--qd_plot', type = str, default = 'qd_plot.png')
+	parser.add_argument(
+		'--qual_plot', type = str, default = 'qual_plot.png')
+	parser.add_argument('--create_qc_plots', type = str)	
+	# containing all high-quality variants
+	parser.add_argument(	
+		'--out_all_variants', type = str, default = 'all_variants.txt')
+		
+	# containing variants such that at least one file has high-quality 
+	# variant and another file does not have variant or has different 
+	# high-quality ref/alt combination at chrom and pos.
+	parser.add_argument(
+		'--out_conflicting_variants', type = str, default = 
+		'conflicting_variants.txt')
+	
+	# containing variants such that at least one file has high-quality
+	# variant and another file has different high-quality ref/alt combination 
+	# at chrom and pos.
+	parser.add_argument(
+		'--out_interesting_variants', type = str, 
+		default = 'interesting_variants.txt')
+		
+	# min quality by depth, read depth for inclusion 
+	# in above variant output files
+	parser.add_argument('--min_qd', type = int, default = 7) #change to 5-10
+	parser.add_argument('--min_dp', type = int, default = 30)
 
 	args = parser.parse_args()
 
 	in_files = []	# input VCF files
+	multi_sample_files = []	#names of multi-sample VCF files
 	counts = [] 	# category:count map for each file
 	readers = []	# PyVCF reader for each file
 	curr_recs = [] 	# current record for each file
+	#qc plot x-axis intervals
+	qc_intervals = {
+		'dp': xrange(0, 55, 5), 'qd': xrange(0, 20, 2), 
+		'qual': xrange(0, 260, 26)}
+	qc_categories = [
+		'all', 'het_all_agree', 'het_disagree', 'hom_all_agree', 
+		'hom_disagree']
+	qc_counts = {}
+	
 	#statistics, in the order in which they will be displayed
+	#in html table
 	categories=[
 		'Filename', 'Total variants', 'High-quality variants',
 		'Homozygous reference', 'SNP', 'Heterozygous', 'Homozygous alternate',
 		'Indel', 'Missing', 'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 
-		'G>C', 'G>T', 'T>A', 'T>C', 'T>G', 'Multi-sample', 'Records skipped',
+		'G>C', 'G>T', 'T>A', 'T>C', 'T>G',
 		'Variants absent from this file present in other files',
 		'High-quality variants present that conflict with other files']
 			
-	init_readers(
-		args.vcf_file_names, counts, in_files, curr_recs, categories, readers,
-		args.min_qd, args.min_dp)
-
+	#initialize readers, counts
+	for f_name in args.vcf_file_names:
+		in_f = open(f_name)
+		reader = vcf.Reader(in_f)
+		f_base_name = os.path.basename(f_name)		
+		if len(reader.samples) > 1:
+			multi_sample_files.append(f_base_name)
+			in_f.close()
+		else:
+			in_files.append(in_f)
+			counts.append({})
+			for cat in categories:
+				counts[-1][cat] = 0
+			counts[-1]['Filename'] = f_base_name
+			readers.append(reader)
+			curr_recs.append(reader.next())
+	
+	for i in qc_intervals:
+		qc_counts[i] = {}			
+		for j in qc_categories:
+			qc_counts[i][j] = {}
+			for k in qc_intervals[i]:
+				qc_counts[i][j][k] = 0	
+			
+	#iterate over vcf files, write variant comparison output files, 
+	#fill in counts	
 	header = (
 		'Chr\tPos\tRef\tAlt\t' + '\t'.join([z['Filename'] for z in counts]) 
 		+ '\t%Present\tAve_QD\tAve_DP' + '\n')
-		
 	with open(args.out_all_variants, 'w') as out_all_variants, \
-	open(args.out_conflicting_variants, 'w') as out_conflicting_variants:	
+	open(args.out_conflicting_variants, 'w') as out_conflicting_variants, \
+	open(args.out_interesting_variants, 'w') as out_interesting_variants:	
 		out_all_variants.write(header)		
 		out_conflicting_variants.write(header)
+		out_interesting_variants.write(header)
 		compare_variants(
 			readers, curr_recs, out_all_variants, out_conflicting_variants, 
-			counts, args.min_qd, args.min_dp)
-
+			out_interesting_variants, counts, args.min_qd, args.min_dp,
+			qc_counts)
 	for f in in_files:
 		f.close()	
 	
-	counts_norm = normalize_counts(categories, counts)
+	#output qc plots
+ 	output_qc_plot(
+ 		qc_categories, 'Read depth', qc_counts['dp'], args.depth_plot, 
+ 		qc_intervals['dp'])
+	output_qc_plot(
+		qc_categories, 'Quality by depth', qc_counts['qd'], args.qd_plot, 
+		qc_intervals['qd'])
+	output_qc_plot(
+		qc_categories, 'Quality', qc_counts['qual'], args.qual_plot, 
+		qc_intervals['qual'])
+		
+ 	#output html stats file
+ 	counts_norm = normalize_counts(categories, counts)
 	with open(args.out_stats, 'w') as out_f:
-		message = (
-			'Note: Normalized with respect to the number of high-quality ' +
-			'variants, and to the value in the leftmost '+
+		page_title = 'VCF Comparison'
+		out_f.write(
+			'<!DOCTYPE html><html><head><title>' + page_title 
+			+ '</title></head><body><h1>' + page_title + '</h1>')
+		table_message = (
+			'Note: Normalized with respect to the number of ' +
+			'high-quality variants, and to the value in the leftmost ' +
 			'numeric column. Normalized values less than 0.95 or ' +
 			'greater than 1.05 are shown in blue. Counts shown are after ' +
 			'quality filtering.')
 		print_dict_list(
-			out_f, 'VCF Comparison', 'Counts (with normalization)', 
-			counts_norm, categories, 'Filename', message)
-
-
-def init_readers(
-	f_names, counts, in_files, curr_recs, categories, readers, min_qd, min_dp):
-	"""
-	Initialize VCF readers and stats dict.
-	
-	Args:
-		f_names (list of str): VCF file names.
-		counts (list of dict): Category:count dict per file.
-		in_files (list of file): All VCF files.
-		curr_recs (list of vcf.model._Record): Record that each file is on.
-		categories (list of str): Ordered categories for stats output.
-		readers (list of vcf.Reader): VCF readers.
-	"""
-	for f_name in f_names:
-		in_files.append(open(f_name))
-		counts.append({})
-		f_base_name = os.path.basename(f_name)
-		if '.' in f_base_name:
-			f_base_name = f_base_name[:f_base_name.index('.')]		
-		counts[-1]['Filename'] = f_base_name
-		reader = vcf.Reader(in_files[-1])
-		counts[-1]['Multi-sample'] = len(reader.samples) > 1
-		for cat in [z for z in categories if z not in 
-		['Filename', 'Multi-sample']]:
-			counts[-1][cat] = (
-				0 if ((not counts[-1]['Multi-sample']) or (cat == 
-				'Records skipped') or (cat == 'Total variants')) else '--')
-		readers.append(reader)
-		is_high_qual = False
-		record = reader.next()
-		curr_recs.append(record)
+			out_f, 'Counts (with normalization)', 
+			counts_norm, categories, 'Filename', table_message)
+		if len(multi_sample_files) > 0:
+			out_f.write(
+				'<p><b>Multi-sample files excluded from ' +
+				'analysis: </b>' + ', '.join(multi_sample_files) + '</p>')
+		out_f.write('</body></html>')
 		
-
+		
 def compare_variants(
-	readers, curr_recs, out_all_variants, out_conflicting_variants, counts, 
-	min_qd, min_dp):
-	"""Process variants present in VCF files: Iterate through all files 
-	simultaneously. Write per-file variant info to all_variants output file 
-	and update overall statistics (counts). 
-	
-	Args:
-		readers (list of vcf.Reader): VCF readers.
-		curr_recs (list of vcf.model._Record): Record that each file is on.
-		out_all_variants (text file): 
-			Open output file to write all variants above min_qd and min_dp
-		 	to.
-		out_conflicting_variants (text file): 
-			Open output file to write disagreements above min_qd and 
-			min_dp to.
-		counts (list of dicts): Category:count dict per file.
-		min_qd (int): Min QD score for inclusion in variant output files.
-		min_dp (int): Min DP score for inclusion in variant output files.
+	readers, curr_recs, out_all_variants, out_conflicting_variants, 
+	out_interesting_variants, counts, min_qd, min_dp, qc_counts):
+	"""Iterate through all VCF files simultaneously. Write per-file 
+	variant info to output files and update overall statistics (counts). 
 	"""
-	done_readers = []
+	if min(len(readers), len(curr_recs), len(counts)) == 0:
+		return
+	done_readers = [] #indices of readers for which eof has been reached
+			
 	min_chrom = min_chromosome(
 		list(curr_recs[z].CHROM for z in xrange(len(curr_recs)) 
 		if not z in done_readers))
 	print 'Processing ' + min_chrom + '...'
 	while len(done_readers) < len(readers):
-		curr_variant_in_file = []
+		curr_variant_in_file = [] # bool list. True iff file has variant.
 		new_min_chrom = min_chromosome(
 			list(curr_recs[z].CHROM for z in xrange(len(curr_recs)) 
 			if not z in done_readers))
@@ -137,35 +170,39 @@ def compare_variants(
 		curr_calls = [None] * len(readers)
 		prev_recs = list(curr_recs)
 		for i, reader in enumerate(readers):
-			call = curr_recs[i].genotype(reader.samples[0])
-			qd = curr_recs[i].INFO['QD']
+			record = curr_recs[i]
+			call = record.genotype(reader.samples[0])
+			qd = record.INFO['QD']
 			dp = call['DP']
 			if (
-				curr_recs[i].CHROM == min_chrom and 
-				curr_recs[i].POS == min_pos and not i in done_readers):
-				counts[i]['Total variants'] += 1
+				record.CHROM == min_chrom and 
+				record.POS == min_pos and not i in done_readers):
+				counts[i]['Total variants'] += 1		
 				is_high_qual = (
 					dp is not None and qd is not None and qd >= min_qd and 
 					dp >= min_dp)
 				if is_high_qual:
 					curr_variant_in_file.append('high_qual')
-					curr_calls[i] = call
 					update_counts(counts[i], reader, curr_recs[i])
 				else:
 					curr_variant_in_file.append('low_qual')
+				curr_calls[i] = call
 				try:
-					record = reader.next()
-					curr_recs[i] = record
+					curr_recs[i] = reader.next()
 				except StopIteration:
 					done_readers.append(i)
 			else:
 				curr_variant_in_file.append('absent')
-		output_variant(
+				
+		#write single variant (at min_chrom and min_pos) to output files,
+		#update counts
+		process_variant(
 			curr_variant_in_file, prev_recs, curr_calls, out_all_variants,
-			out_conflicting_variants, min_qd, min_dp, counts)
+			out_conflicting_variants, out_interesting_variants, min_qd, min_dp,
+			counts, qc_counts)
 
-
-#used with output_variant function		
+	
+#used with process_variant function		
 class RefAlt:
 	def __init__(self, num_records):
 		self.total_qd = 0
@@ -174,88 +211,126 @@ class RefAlt:
 		self.count_dp = 0
 		self.in_file = ['absent'] * num_records
 		
-def output_variant(
-	variant_in_file, records, calls, out_all_variants, 
-	out_conflicting_variants, min_qd, min_dp, counts):
-	"""Output a single variant to out_all_variants and out_conflicting_variants.
-	
-		Args:
-			variant_in_file (list of bool): True iff file has variant.
-			records (list of vcf.model._Record): Record of variant, per file.
-			calls (list of vcf.model._Call): Variant call, per file.
-			out_all_variants (text file): 
-				Open output file to write all variants above min_qd and 
-				min_dp to.
-			out_conflicting_variants (text file): 
-				Open output file to write disagreements above min_qd and 
-				min_dp to.
-			min_qd (int): Min QD score for inclusion in variant output files.
-			min_dp (int): Min DP score for inclusion in variant output files.
-			counts (list of dicts): Category:count dict per file.
-	"""
-	if all(z in ['low_qual', 'absent'] for z in variant_in_file):
-		return
-	variant_in_all_files = True
 		
-	chrom = records[variant_in_file.index('high_qual')].CHROM
-	pos = records[variant_in_file.index('high_qual')].POS
+def process_variant(
+	variant_in_file, records, calls, out_all_variants, 
+	out_conflicting_variants, out_interesting_variants, min_qd, min_dp, 
+	counts, qc_counts):
+	"""Output a single variant to output files, and update counts.
+	"""
+	high_qual_present = (
+		not all(z in ['low_qual', 'absent'] for z in variant_in_file))
 	
-	#find stats for each different (ref, alt) combination at given position
+	#find each (ref, alt) combination at given position
 	#on chromosome
 	dict_var_stats = {} 	#(ref, alt) : RefAlt obj
+
 	for i in xrange(len(records)):
 		if variant_in_file[i] == 'absent':
-			continue
-		ref = str(records[i].REF)
-		alt = str(records[i].ALT[0])
-		if not (ref, alt) in dict_var_stats:
-			dict_var_stats[(ref, alt)] = RefAlt(len(records))
-		dict_var_stats[(ref, alt)].in_file[i] = variant_in_file[i]
-		if variant_in_file[i] == 'high_qual':
-			qd = records[i].INFO['QD']
-			dp = calls[i]['DP']
-			if qd is not None:
-				dict_var_stats[(ref, alt)].total_qd += qd
-				dict_var_stats[(ref, alt)].count_qd += 1
-			if dp is not None:
-				dict_var_stats[(ref, alt)].total_dp += dp
-				dict_var_stats[(ref, alt)].count_dp += 1				
-	
+			continue		
+		call = calls[i]
+		record = records[i]
+		ref = str(record.REF)
+		alt = str(record.ALT[0])
+		try:
+			dp = call['DP']
+		except TypeError:
+			dp = None 
+		qd = record.INFO['QD']
+		
+		#update dict_var_stats
+		if high_qual_present:			
+			if not (ref, alt) in dict_var_stats:
+				dict_var_stats[(ref, alt)] = RefAlt(len(records))
+			dict_var_stats[(ref, alt)].in_file[i] = variant_in_file[i]									
+			if variant_in_file[i] == 'high_qual':
+				if qd is not None:
+					dict_var_stats[(ref, alt)].total_qd += qd
+					dict_var_stats[(ref, alt)].count_qd += 1
+				if dp is not None:
+					dict_var_stats[(ref, alt)].total_dp += dp
+					dict_var_stats[(ref, alt)].count_dp += 1
+					
 	multiple_vars = (
 		len([z for z in dict_var_stats if 'high_qual' in 
 		dict_var_stats[z].in_file]) > 1)
 		
-	#output each (ref, alt) combination at given position on chromosome
-	for x in dict_var_stats:
-		if all (
-			z != 'high_qual' for z in dict_var_stats[x].in_file):
+	#update qc counts
+	all_agree = (
+		all(v != 'absent' for v in variant_in_file) and (not multiple_vars))
+	for i in xrange(len(records)):
+		if variant_in_file[i] == 'absent':
 			continue
-		ref = x[0]
-		alt = x[1]
-		ave_qd = float(dict_var_stats[x].total_qd) / dict_var_stats[x].count_qd
-		ave_dp = float(dict_var_stats[x].total_dp) / dict_var_stats[x].count_dp
-		percent_present = (
-			100.0 * (dict_var_stats[x].in_file.count('low_qual') + 
-			dict_var_stats[x].in_file.count('high_qual')) / len(records))
-		variant_in_file_str = '\t'.join(dict_var_stats[x].in_file)
-		for i, in_file in enumerate(dict_var_stats[x].in_file):
-			if not counts[i]['Multi-sample']:
-				if in_file == 'absent':
-					#same chrom, pos but different ref/ alt counts as absent.
-					counts[i]['Variants absent from this file ' +
-					'present in other files'] += 1
-				if (
-					in_file == 'high_qual' and percent_present not in 
-					[0, 100]):
-					counts[i]['High-quality variants present that ' + 
-					'conflict with other files'] += 1
-		out_str = (
-			'%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\n' % (chrom, 
-			str(pos), ref, alt, variant_in_file_str, percent_present, 
-			ave_qd, ave_dp))
-		out_all_variants.write(out_str)	
-		if percent_present not in [0, 100]:
-			out_conflicting_variants.write(out_str)
+		call = calls[i]
+		record = records[i]	
+		try:
+			dp = call['DP']
+		except TypeError:
+			dp = None 
+		qd = record.INFO['QD']
+		qual = record.QUAL
+		update_qc_counts(record, all_agree, dp, qc_counts['dp'])
+		update_qc_counts(record, all_agree, qd, qc_counts['qd'])
+		update_qc_counts(record, all_agree, qual, qc_counts['qual'])
+						
+	if high_qual_present:
+		chrom = records[variant_in_file.index('high_qual')].CHROM
+		pos = records[variant_in_file.index('high_qual')].POS		
+		
+		#output each (ref, alt) combination at given position on chromosome
+		for x in dict_var_stats:
+			 output_ref_alt(x, out_all_variants, out_conflicting_variants, 
+			 out_interesting_variants, dict_var_stats, counts, chrom, pos,
+			 multiple_vars)
+	
+	
+def update_qc_counts(record, all_agree, qc_val, qc_counts):
+	intervals = [z for z in qc_counts['all']]
+	for x in intervals:
+		if (qc_val is not None) and qc_val >= x:
+			qc_counts['all'][x] += 1
+			if all_agree:
+				qc_counts['hom_all_agree'][x] += record.num_hom_alt
+				qc_counts['het_all_agree'][x] += record.num_het
+			else:
+				qc_counts['hom_disagree'][x] += record.num_hom_alt
+				qc_counts['het_disagree'][x] += record.num_het	
+			
+			
+def output_ref_alt(
+	ref_alt, out_all_variants, out_conflicting_variants,
+	out_interesting_variants, dict_var_stats, counts, chrom, pos,
+	multiple_vars):	
+	ref_alt_obj = dict_var_stats[ref_alt]
+	if all (z != 'high_qual' for z in ref_alt_obj.in_file):
+		return
+	ref = ref_alt[0]
+	alt = ref_alt[1]
+	ave_qd = float(ref_alt_obj.total_qd) / ref_alt_obj.count_qd
+	ave_dp = float(ref_alt_obj.total_dp) / ref_alt_obj.count_dp
+	percent_present = (
+		100.0 * (ref_alt_obj.in_file.count('low_qual') + 
+		ref_alt_obj.in_file.count('high_qual')) / len(ref_alt_obj.in_file))
+	variant_in_file_str = '\t'.join(ref_alt_obj.in_file)
+	for i, in_file in enumerate(ref_alt_obj.in_file):
+		if in_file == 'absent':
+			#same chrom, pos but different ref/ alt counts as absent.
+			counts[i]['Variants absent from this file ' +
+			'present in other files'] += 1
+		if (
+			in_file == 'high_qual' and percent_present not in 
+			[0, 100]):
+			counts[i]['High-quality variants present that ' +
+			'conflict with other files'] += 1
+	out_str = (
+		'%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\n' % (chrom, 
+		str(pos), ref, alt, variant_in_file_str, percent_present, 
+		ave_qd, ave_dp))
+	out_all_variants.write(out_str)	
+	if percent_present not in [0, 100]:
+		out_conflicting_variants.write(out_str)
+		if multiple_vars:
+			out_interesting_variants.write(out_str)
 
 
 def min_chromosome(chroms):
@@ -279,16 +354,13 @@ def min_chromosome(chroms):
 		
 
 def update_counts(counts, reader, record):
-	"""Update counts map given a VCF record. 
+	"""Update counts map given a VCF record. Assumes high-quality variant.
 	
 	Args:
 		counts (dict): Dict of category:count.
 		reader (VCF reader): VCF reader for file.
 		record (VCF reader record): Specific VCF record.
-	"""	
-	if counts['Multi-sample']:
-		counts['Records skipped'] += 1
-		return		
+	"""		
 	counts['High-quality variants'] += 1
 	counts['Heterozygous'] += record.num_het
 	counts['Homozygous alternate'] += record.num_hom_alt
@@ -306,7 +378,7 @@ def update_counts(counts, reader, record):
 	
 
 def print_dict_list(
-	out_f, page_title, table_title, dict_list, cats, header_cat, message):
+	out_f, table_title, dict_list, cats, header_cat, table_message):
 	"""Create HTML file and print a list of category:value dictionaries as an
 	HTML table.
 	
@@ -317,14 +389,12 @@ def print_dict_list(
 		cats (list of string): Ordered categories for stats output.
 		header_cat (str): Category to group other categories by.
 	"""
-	out_f.write(
-		'<!DOCTYPE html><html><head><title>' + page_title 
-		+ '</title></head><body><h1>' + page_title + '</h1>')
+	if len(dict_list) == 0:
+		return
 	out_f.write(
 		'<h2>' + table_title + '</h2><table border="1"><tr><th></th>')
 	for d in dict_list:
-		out_f.write(
-			'<th>' + d[header_cat] + '</th>')
+		out_f.write('<th>' + d[header_cat] + '</th>')
 	out_f.write('</tr>')
 	for cat in [z for z in cats if z != header_cat]:
 		out_f.write(
@@ -333,35 +403,33 @@ def print_dict_list(
 			out_f.write('<td>' + str(d[cat]) + '</td>')
 		out_f.write('</tr>')	
 	out_f.write('</table>')
-	out_f.write('<p>' + message + '</p>')
-	out_f.write('</body></html>')
+	out_f.write('<p>' + table_message + '</p>')
 		
 		
 def normalize_counts(categories, counts):
-	min_index = (
-		min(i for i in xrange(len(counts)) if not counts[i]['Multi-sample']))
+	if len(counts) == 0:
+		return []
+	min_index = 0
+	flag_dist = .05  #normalized table entries at least flag_dist
+					 #distance from 1 are flagged (colored).
 	counts_norm = [dict(z) for z in counts]
 	for cat in categories:
 		min_val = counts[min_index][cat]
 		for f in xrange(len(counts)):
 			if (
-				isinstance(counts[f][cat], int) and (not isinstance(
-				counts[f][cat], bool)) and counts[f][cat] == 0 and
-				all((z[cat] in [0, '--']) for z in counts)):
+				all(z[cat] == 0 and (not isinstance(z[cat], bool)) 
+				for z in counts)):
 				counts_norm[f][cat] = str(counts[f][cat]) + ' (%.2f)' % 1
 			else:
 				if (
 					(not isinstance(counts[f][cat], int)) or (isinstance(
-					counts[f][cat], bool)) or (min_val == 0) or
-					(counts[f]['Multi-sample'])):
+					counts[f][cat], bool)) or (min_val == 0)):
 					continue
 				counts_norm[f][cat] = (
 					(counts[f][cat] / float(min_val) * 
 					(float(counts[min_index]['High-quality variants']) / 
 					counts[f]['High-quality variants'])))
-				if (
-					counts_norm[f][cat] < 1.05 and counts_norm[f][cat] 
-					> 0.95):
+				if abs(1.0 - counts_norm[f][cat]) < .05:
 					counts_norm[f][cat] = (
 						str(counts[f][cat]) + ' (%.2f)' % counts_norm[f][cat])
 				else:
@@ -371,5 +439,27 @@ def normalize_counts(categories, counts):
 						% counts_norm[f][cat])	
 	return counts_norm
 
+
+def output_qc_plot(
+	qc_categories, qc_param_label, qc_counts, out_filename, intervals):
+	plt.clf()
+	for categ in qc_categories:
+		if categ != 'all':
+			plt.plot(
+				intervals, [(1.0 - (float(qc_counts[categ][n])  /
+				qc_counts[categ][0])) for n in intervals], label = categ)
+	plt.axis([0, max(intervals), 0, 1.05])
+	plt.xlabel(qc_param_label)
+	plt.ylabel('Fraction removed')
+	plt.title(qc_param_label + ' as a QC parameter')
+	ax = plt.subplot(111)
+	box = ax.get_position()
+	ax.set_position([box.x0, box.y0, box.width * .75, box.height])
+	ax.legend(
+		[z for z in qc_categories if z != 'all'], loc = 'center left', 
+		bbox_to_anchor = (1, .87))
+	plt.savefig(out_filename)
+	
+	
 if __name__ == '__main__':
 	main()
