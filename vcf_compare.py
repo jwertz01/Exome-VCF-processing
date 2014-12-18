@@ -298,7 +298,7 @@ def process_variant(
 			if v.has_curr_variant == 'absent':
 				continue
 			call = v.curr_call
-			record = v.curr_record
+			record = v.curr_rec
 			try:
 				dp = call['DP']
 			except TypeError:
