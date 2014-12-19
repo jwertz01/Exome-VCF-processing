@@ -15,8 +15,15 @@ class VcfFile:
 		self.curr_rec = None	# previous record
 		self.next_rec = next_rec	# current record
 		self.curr_call = None	# current call
-		self.eof = False	#end of file has been reached
-		self.has_curr_variant = 'absent'	#absent/low_qual/high_qual
+		self.eof = False	# end of file has been reached
+		self.has_curr_variant = 'absent'	# absent/low_qual/high_qual
+	
+	def __str__(self):
+		return (
+			'Filename: %s\nCounts: %s\nCurr rec: %s\nNext rec: %s\nEOF: %s' 
+			'\nHas curr variant: %s\nFamily rel: %s\n' % 
+			(self.file_name, self.counts, self.curr_rec, self.next_rec, 
+			self.eof, self.has_curr_variant, self.family_rel))
 		
 def main():
 	parser = argparse.ArgumentParser()	
@@ -42,6 +49,7 @@ def main():
 	parser.add_argument(
 		'--out_multiple_vars_no_indel', 
 		default = 'conflicts_multiple_vars_no_indel.txt')
+	
 	# min quality by depth, quality, read depth for inclusion 
 	# in above variant output files
 	parser.add_argument('--min_qd', type = int, default = 3) 
@@ -75,7 +83,7 @@ def main():
 		'Indel', 'Missing', 'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 
 		'G>C', 'G>T', 'T>A', 'T>C', 'T>G',
 		'Variants absent from this file present in other files',
-		'High-quality variants present that conflict with ' +
+		'High-quality variants present that conflict with ' 
 		'variants present in other files']
 			
 	#initialize readers, counts
@@ -104,18 +112,18 @@ def main():
 	#iterate over vcf files, write variant comparison output files, 
 	#fill in counts	
 	header = (
-		'CHROM\tPOS\tREF\tALT\tGT\t' + '\t'.join([v.file_name for v in 
-		vcf_file_objs]) + '\t%Present\tAve_QD\tAve_DP\tAve_AD0(high-qual)' +
-		'\tAve_AD1(high-qual)\tAve_QUAL')
+		'CHROM\tPOS\tREF\tALT\tGT\t%s\t%%Present\tAve_QD\tAve_DP\tAve_AD0'
+		'(high-qual)\tAve_AD1(high-qual)\tAve_QUAL' %
+		('\t'.join([v.file_name for v in vcf_file_objs])))
 	with open(args.out_all_variants, 'w') as out_all, \
 	open(args.out_absent, 'w') as out_absent, \
 	open(args.out_multiple_vars, 'w') as out_multiple, \
-	open(args.out_multiple_vars_no_indel, 'w') as out_multiple_no_indel:	
+	open(args.out_multiple_vars_no_indel, 'w') as out_multiple_no_indel:
 		out_all.write(header + '\n')		
 		out_absent.write(header + '\n')
 		out_multiple.write(header + '\n')
 		out_multiple_no_indel.write(header + '\tSummary\tConclusion\n')
-		
+	
 		compare_variants(
 			vcf_file_objs, qc_counts, overall_counts, args, 
 			out_all, out_absent, out_multiple, out_multiple_no_indel)
@@ -141,16 +149,16 @@ def main():
 	with open(args.out_stats, 'w') as out_f:
 		page_title = 'VCF Comparison'
 		out_f.write(
-			'<!DOCTYPE html><html><head><title>' + page_title 
-			+ '</title></head><body><h1>' + page_title + '</h1>')
+			'<!DOCTYPE html><html><head><title>%s</title></head><body>'
+			'<h1>%s</h1>' % (page_title, page_title))
 		table_message = (
-			'<p>The bottom two rows are per unique combination of CHROM, ' +
-			'POS, REF, ALT, and GT. The rest are per unique combination ' +
+			'<p>The bottom two rows are per unique combination of CHROM, '
+			'POS, REF, ALT, and GT. The rest are per unique combination '
 			'of CHROM and POS. </p>'
-			'<p>Normalized with respect to the number of ' +
-			'high-quality variants, and to the value in the leftmost ' +
-			'numeric column. Normalized values less than 0.95 or ' +
-			'greater than 1.05 are shown in blue. Counts shown (excluding ' +
+			'<p>Normalized with respect to the number of '
+			'high-quality variants, and to the value in the leftmost '
+			'numeric column. Normalized values less than 0.95 or '
+			'greater than 1.05 are shown in blue. Counts shown (excluding '
 			'total variants) are after quality filtering.</p>')
 		print_dict_list(
 			out_f, 'Counts Per File', counts_norm, categories, 
@@ -158,12 +166,12 @@ def main():
 		if len(multi_sample_files) > 0:
 			out_f.write(
 				'<p><b>Multi-sample files excluded from ' +
-				'analysis: </b>' + ', '.join(multi_sample_files) + '</p>')
+				'analysis: </b>%s</p>' % (', '.join(multi_sample_files)))
 		out_f.write(
-			'<h2>Overall Counts Per Unique Combination of CHROM, POS, REF, '+
-			' ALT, and GT</h2>')
+			'<h2>Overall Counts Per Unique Combination of CHROM, POS, REF, '
+			'ALT, and GT</h2>')
 		out_f.write(
-			'<p>Each category (except Pass_QC) is a subcategory of the ' +
+			'<p>Each category (except Pass_QC) is a subcategory of the '
 			'rightmost category directly above it.</p>')
 		out_f.write('<table><tr>')
 		for x in overall_counts_categs:
@@ -172,8 +180,8 @@ def main():
 				'Conflicts_multiple_indel', 'Low_QC', 'Predict_HET']):
 				out_f.write('</tr><tr>')
 			out_f.write(
-				'<td style=padding-right:2em><b>' + x + '</b>: ' + 
-				str(overall_counts[x]) + '</td>')
+				'<td style=padding-right:2em><b>%s</b>: %d</td>' % 
+				(x, overall_counts[x]))
 		out_f.write('</tr></table>')
 		out_f.write('</body></html>')
 		
@@ -190,12 +198,12 @@ def compare_variants(
 			
 	min_chrom = min_chromosome(
 		[v.next_rec.CHROM for v in vcf_file_objs if not v.eof])
-	print 'Processing ' + min_chrom + '...'
+	print 'Processing %s...' % min_chrom
 	while not (all([v.eof for v in vcf_file_objs])):
 		new_min_chrom = min_chromosome(
 			[v.next_rec.CHROM for v in vcf_file_objs if not v.eof])
 		if new_min_chrom != min_chrom:
-			print 'Processing ' + new_min_chrom + '...'
+			print 'Processing %s...' % new_min_chrom
 			min_chrom = new_min_chrom
 		min_pos = min(
 			[v.next_rec.POS for v in vcf_file_objs if 
@@ -278,7 +286,7 @@ def process_variant(
 			if not (ref, alt, gt) in dict_var_stats:
 				dict_var_stats[(ref, alt, gt)] = RefAlt(len(vcf_file_objs))
 			ref_alt_obj = dict_var_stats[(ref, alt, gt)]
-			dict_var_stats[(ref, alt, gt)].in_file[i] = v.has_curr_variant								
+			dict_var_stats[(ref, alt, gt)].in_file[i] = v.has_curr_variant					
 			if v.has_curr_variant == 'high_qual':
 				ref_alt_obj.total_qd += qd
 				ref_alt_obj.total_dp += dp
@@ -365,12 +373,12 @@ def output_ref_alt(
 	for i, in_file in enumerate(ref_alt_obj.in_file):
 		if in_file == 'absent':
 			#same chrom, pos but different ref/ alt counts as absent.
-			vcf_file_objs[i].counts['Variants absent from this file ' +
+			vcf_file_objs[i].counts['Variants absent from this file '
 			'present in other files'] += 1
 		if (
 			in_file == 'high_qual' and percent_present != 100
 			and multiple_variants):
-			vcf_file_objs[i].counts['High-quality variants present that ' +
+			vcf_file_objs[i].counts['High-quality variants present that '
 			'conflict with variants present in other files'] += 1
 	out_str = (
 		'%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n' 
@@ -423,8 +431,8 @@ def write_multiple_vars(dict_var_stats, out_multiple, overall_counts):
 		common_gt = plurality(dict_var_stats, 2)
 		plur += common_gt
 	out_multiple.write(
-		'\t' + ', '.join(conflicts) + ' conflict.' + ((' Most frequent: ' + 
-		', '.join(plur) + '.') if (plur != []) else ''))
+		'\t%s conflict.' % ', '.join(conflicts) + ((' Most frequent: %s.' % 
+		', '.join(plur)) if (plur != []) else ''))
 		
 	#write AD ratio summary
 	if 'GT' in conflicts:
@@ -440,12 +448,14 @@ def write_multiple_vars(dict_var_stats, out_multiple, overall_counts):
 			ad_ratio_categ = 'HOM-REF'
 		if ad_ratio_categ != 'other':	
 			out_multiple.write(
-				' AD0/AD1 ratio indicates ' + ad_ratio_categ + '.')
+				' AD0/AD1 ratio indicates %s.' % ad_ratio_categ)
 		
 	#write QC summary
-	max_qd_ref_alts = (
-		max([(float(dict_var_stats[z].total_qd) / dict_var_stats[
-		z].in_file.count('high_qual')) for z in dict_var_stats]))
+	max_qd_ref_alts = max(
+		(((float(dict_var_stats[z].total_qd) / dict_var_stats[
+		z].in_file.count('high_qual')) if (dict_var_stats[z
+		].in_file.count('high_qual') > 0) else -1) for z in dict_var_stats))
+
 	if max_qd_ref_alts < 5:
 		out_multiple.write(' Low QD.')
 	elif max_qd_ref_alts < 10:
@@ -471,7 +481,7 @@ def write_multiple_vars(dict_var_stats, out_multiple, overall_counts):
 				overall_counts['Predict_HOM_ALT'] += 1
 			elif ad_ratio_categ == 'HET':
 				overall_counts['Predict_HET'] += 1
-			out_multiple.write(' Predict ' + ad_ratio_categ + '.')
+			out_multiple.write(' Predict %s.' % ad_ratio_categ)
 		else:
 			overall_counts['No_prediction'] += 1
 	elif 'ALT' in conflicts:
@@ -540,8 +550,9 @@ def update_counts(counts, reader, record):
 	counts['SNP'] += is_snp
 	if is_snp:
 		counts[
-			record.alleles[0] + '>' + str(record.alleles
-			[int(max(record.genotype(reader.samples[0]).gt_alleles))])] += 1
+			'%s>%s' % (record.alleles[0], record.alleles[int(
+			 max(record.genotype(reader.samples[0]).gt_alleles))])
+			] += 1
 	
 
 def print_dict_list(
@@ -558,20 +569,19 @@ def print_dict_list(
 	"""
 	if len(dict_list) == 0:
 		return
-	out_f.write('<h2>' + table_title + '</h2>')
+	out_f.write('<h2>%s</h2>' % table_title)
 	out_f.write(table_message)
 	out_f.write(
 		'<table border="1" style="table-layout:fixed; width:'
-		+ str(175 * (len(dict_list) + 1)) + 'px; ' + 
-		'word-wrap:break-word"> ' + '<tr><th></th>')
+		'%dpx; word-wrap:break-word"><tr><th></th>' % (175 * 
+		(len(dict_list) + 1)))
 	for x in header_list:
-		out_f.write('<th>' + x + '</th>')
+		out_f.write('<th>%s</th>' % x)
 	out_f.write('</tr>')
 	for cat in cats:
-		out_f.write(
-			'<tr><th>' + cat + '</th>')
+		out_f.write('<tr><th>%s</th>' % cat)
 		for d in dict_list:
-			out_f.write('<td>' + str(d[cat]) + '</td>')
+			out_f.write('<td>%s</td>'% (d[cat]))
 		out_f.write('</tr>')	
 	out_f.write('</table>')
 		
@@ -604,12 +614,11 @@ def normalize_counts(categories, counts):
 					counts[f]['High-quality variants'])))
 				if abs(1.0 - counts_norm[f][cat]) < flag_dist:
 					counts_norm[f][cat] = (
-						str(counts[f][cat]) + ' (%.2f)' % counts_norm[f][cat])
+						'%d (%.2f)' % (counts[f][cat], counts_norm[f][cat]))
 				else:
 					counts_norm[f][cat] = (
-						str(counts[f][cat]) + 
-						' (<font color = "blue">%.2f</font>)' 
-						% counts_norm[f][cat])	
+						'%d (<font color = "blue">%.2f</font>)' 
+						% (counts[f][cat], counts_norm[f][cat]))
 	return counts_norm
 
 
@@ -626,7 +635,7 @@ def output_qc_plot(
 	plt.axis([0, max(intervals), 0, 1.05])
 	plt.xlabel(qc_param_label)
 	plt.ylabel('Fraction removed')
-	plt.title(qc_param_label + ' as a QC parameter')
+	plt.title('%s as a QC parameter' % qc_param_label)
 	ax = plt.subplot(111)
 	box = ax.get_position()
 	ax.set_position([box.x0, box.y0, box.width * .75, box.height])
