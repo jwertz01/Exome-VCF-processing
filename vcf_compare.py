@@ -3,8 +3,8 @@
 import os
 import sys
 import argparse
-import vcf
 import matplotlib.pyplot as plt
+import vcf
 
 class VcfFile:
 	def __init__(self, file_name, file, reader, next_rec):
@@ -538,21 +538,24 @@ def update_counts(counts, reader, record):
 		reader (VCF reader): VCF reader for file.
 		record (VCF reader record): Specific VCF record.
 	"""		
+	call = record.genotype(reader.samples[0])
 	counts['High-quality variants'] += 1
-	counts['Heterozygous'] += record.num_het
-	counts['Homozygous alternate'] += record.num_hom_alt
-	counts['Homozygous reference'] += record.num_hom_ref
-	counts['Missing'] += record.num_unknown
+	if call.gt_type == 1:
+		counts['Heterozygous'] += 1
+	elif call.gt_type == 2:
+		counts['Homozygous alternate'] += 1
+	elif call.gt_type == None:
+		counts['Missing'] += 1
+	else:
+		counts['Homozygous reference'] += 1
+
 	counts['Indel'] += record.is_indel
-	is_snp = (
-		1 if (record.is_snp and record.genotype(reader.samples[0]).is_variant) 
-		else 0)
+	is_snp = (1 if (record.is_snp and call.is_variant) else 0)
 	counts['SNP'] += is_snp
 	if is_snp:
 		counts[
-			'%s>%s' % (record.alleles[0], record.alleles[int(
-			 max(record.genotype(reader.samples[0]).gt_alleles))])
-			] += 1
+			'%s>%s' % (record.alleles[0], record.alleles[int(max(
+			call.gt_alleles))])] += 1
 	
 
 def print_dict_list(
