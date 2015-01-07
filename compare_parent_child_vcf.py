@@ -1,4 +1,6 @@
-"""Compares VCF files. Produces statistics and variant comparison files."""
+"""Compares VCF files obtained from a parent-offspring trio.
+Produces statistics and variant comparison files, with analysis
+of inheritance."""
 
 import os
 import sys
@@ -61,7 +63,7 @@ def main():
     qc_counts = {}
     # categories displayed in flowchart in html file
     overall_counts_categs = [
-        'Pass QC', 'Indel', 'No indel', 'Internal conflict', 'Invalid', 
+        'Pass QC', 'Indel', 'No indel', 'Internal conflict', 'Invalid',
         'De novo', 'Inherited',
         'Parents HOM-REF, HET; child HOM-REF',
         'Parents HOM-REF, HET; child HET',
@@ -123,25 +125,15 @@ def main():
     # iterate over vcf files, write variant comparison output files,
     # fill in counts
     header = (
-        'CHROM\tPOS\tREF\tALT\tGT\tInheritance\t%s\t%%Present\tAve_QD'
+        'CHROM\tPOS\tREF\tALT\tGT\tInheritance_category\t'
+        'Inheritance_subcategory\t%s\t%%Present\tAve_QD'
         '\tAve_DP\tAve_QUAL\tAve_AD0\tAve_AD1\n' %
         ('\t'.join([v.file_name for v in vcf_file_objs]))
     )
-    with \
-            open(args.out_all_variants, 'w') as out_all, \
-            open(args.out_de_novo, 'w') as out_de_novo, \
-            open(args.out_inherited, 'w') as out_inherited, \
-            open(args.out_invalid, 'w') as out_invalid:
-        out_files = {
-            'all': out_all, 'de_novo': out_de_novo,
-            'inherited': out_inherited, 'invalid': out_invalid
-        }
-        # for f in out_files:
-        #     out_files[f].write(header)
-        out_files['all'].write(header)
-
+    with open(args.out_all_variants, 'w') as out_all:
+        out_all.write(header)
         compare_variants(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files
+            vcf_file_objs, qc_counts, overall_counts, args, out_all
         )
 
     for v in vcf_file_objs:
@@ -204,7 +196,7 @@ def main():
         )
         for x in overall_counts_categs:
             if x in [
-                'Indel', 'Internal conflict', 
+                'Indel', 'Internal conflict',
                 'Parents HOM-REF, HET; child HOM-REF'
             ]:
                 out_f.write('</tr><tr>')
@@ -259,29 +251,11 @@ def add_arguments(parser):
              'qual_plot.png)'
     )
     parser.add_argument(
-        '--out_all_variants', default='all_pass_qc.txt',
+        '--out_all_variants', default='out_all_variants.txt',
         help='Name of output file containing all high-quality '
              'variants. (Default: all_pass_qc.txt)'
     )
-    parser.add_argument(
-        '--out_de_novo', default='de_novo.txt',
-        help='Name of output file containing variants present in '
-             'child files but not in parent files. (Default: '
-             'de_novo.txt)'
-    )
-    parser.add_argument(
-        '--out_inherited', default='inherited.txt',
-        help='Name of output file containing variants with valid '
-             'inheritance relationship between child and parent '
-             'files. (Default: inherited.txt)'
-    )
-    parser.add_argument(
-        '--out_invalid', default='invalid.txt',
-        help='Name of output file containing variants with invalid '
-             'inheritance relationship or internal variant '
-             'identification conflict within Parent 1/ Parent 2/ child '
-             'files. (Default: invalid.txt)'
-    )
+
     parser.add_argument(
         '--min_qd', type=int, default=3,
         help='Minimum quality by depth for inclusion in variant '
@@ -301,7 +275,7 @@ def add_arguments(parser):
 
 
 def compare_variants(
-    vcf_file_objs, qc_counts, overall_counts, args, out_files
+    vcf_file_objs, qc_counts, overall_counts, args, out_all
 ):
     """Iterate through all VCF files simultaneously. Write per-file
     variant info to output files and update overall statistics
@@ -361,12 +335,12 @@ def compare_variants(
         # write single variant (at min_chrom and min_pos) to output files,
         # update counts
         process_variant(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files
+            vcf_file_objs, qc_counts, overall_counts, args, out_all
         )
 
 
 def process_variant(
-    vcf_file_objs, qc_counts, overall_counts, args, out_files
+    vcf_file_objs, qc_counts, overall_counts, args, out_all
 ):
     """Output a single variant to output files, and update counts."""
     if all(
@@ -386,17 +360,16 @@ def process_variant(
             else:
                 files_per_variant[(ref, alt, gt)] = [v]
 
-
     # output each (ref, alt, gt) combination at given position on chromosome
     for x in files_per_variant:
         output_ref_alt_gt(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files, x,
+            vcf_file_objs, qc_counts, overall_counts, args, out_all, x,
             files_per_variant
         )
 
 
 def output_ref_alt_gt(
-    vcf_file_objs, qc_counts, overall_counts, args, out_files, ref_alt_gt,
+    vcf_file_objs, qc_counts, overall_counts, args, out_all, ref_alt_gt,
     files_per_variant
 ):
     """Process a variant uniquely identified by combination of
@@ -404,149 +377,101 @@ def output_ref_alt_gt(
     overall_counts.
     """
     # list of VCF files that have given ref, alt, gt
-    ref_alt_gt_files = files_per_variant[ref_alt_gt]
-
-    if all([v.has_curr_variant != 'high_qual' for v in ref_alt_gt_files]):
+    if all([v.has_curr_variant != 'high_qual' for v in vcf_file_objs]):
         return
-
+    ref_alt_gt_files = files_per_variant[ref_alt_gt]
     chrom = ref_alt_gt_files[0].curr_rec.CHROM
     pos = ref_alt_gt_files[0].curr_rec.POS
     ref, alt, gt = ref_alt_gt
 
     qc_averages = {'qd': 0, 'dp': 0, 'qual': 0, 'ad0': 0, 'ad1': 0}
-    count_high_qual, count_low_qual = 0, 0
+    count_high_qual = 0
     for v in ref_alt_gt_files:
-        call = v.curr_call
-        record = v.curr_rec
         if v.has_curr_variant == 'high_qual':
+            call = v.curr_call
+            record = v.curr_rec
             qc_averages['qd'] += record.INFO['QD']
             qc_averages['dp'] += call['DP']
             qc_averages['qual'] += record.QUAL
             qc_averages['ad0'] += call['AD'][0]
             qc_averages['ad1'] += call['AD'][1]
             count_high_qual += 1
-        else:
-            count_low_qual += 1
-
     for x in qc_averages:
-        qc_averages[x] /= float(count_high_qual)
-
-    multiple_variants = [
-        'high_qual' in [v.has_curr_variant for v in files_per_variant[x]]
-        for x in files_per_variant
-    ].count(True) > 1
+        if count_high_qual == 0:
+            qc_averages[x] = -1
+        else:
+            qc_averages[x] /= float(count_high_qual)
 
     percent_present = 100.0 * len(ref_alt_gt_files) / len(vcf_file_objs)
 
-    variant_in_file_str = '\t'.join(
-        [
-            (v.has_curr_variant if (v in ref_alt_gt_files) else 'absent')
-            for v in vcf_file_objs
-        ]
-    )
-    out_str = (
-        '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n' %
-        (
-            chrom, str(pos), ref, alt, gt, '[Indel]', variant_in_file_str,
-            percent_present, qc_averages['qd'], qc_averages['dp'],
-            qc_averages['qual'], qc_averages['ad0'], qc_averages['ad1']
-        )
-    )
+    variant_in_file_str = ''
+    for v in vcf_file_objs:
+        if (
+            v.has_curr_variant != 'absent' and ref == str(v.curr_rec.REF) and
+            alt == str(v.curr_rec.ALT[0]) and gt == v.curr_call['GT']
+        ):
+            variant_in_file_str += v.has_curr_variant
+        else:
+            variant_in_file_str += 'absent'
+        variant_in_file_str += '\t'
+    variant_in_file_str = variant_in_file_str[:-1]
+
     overall_counts['Pass QC'] += 1
+
+    # output indels
     if True in [
         v.curr_rec.is_indel for v in vcf_file_objs if
         v.has_curr_variant != 'absent'
     ]:
-        out_files['all'].write(out_str)
+        out_all.write(
+            '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t'
+            '%.2f\t%.2f\n' %
+            (
+                chrom, str(pos), ref, alt, gt, '[Indel]', 'NA',
+                variant_in_file_str, percent_present, qc_averages['qd'],
+                qc_averages['dp'], qc_averages['qual'], qc_averages['ad0'],
+                qc_averages['ad1']
+            )
+        )
         overall_counts['Indel'] += 1
         return
     overall_counts['No indel'] += 1
 
-    parent_present = False
-    child_present = False
-    for v in ref_alt_gt_files:
-        if 'Parent' in v.family_rel:
-            parent_present = True
-        else:  # v.family_rel == 'Child':
-            child_present = True
-
-    # find internal disagreements within parent 1 files/ 
+    # find internal disagreements within parent 1 files/
     # parent 2 files/ child files
-    parent_1s_disagree, parent_2s_disagree, children_disagree = (
-        False, False, False
-    )
-    first_parent_1, first_parent_2, first_child = None, None, None
-    parent_1_file, parent_2_file, child_file = None, None, None
-
-    # if high_qual in multiple ref/alt/gt, internal disagreement
-    for x in files_per_variant:  # x == ref, alt, gt
-        for v in files_per_variant[x]:
-            if v.family_rel == 'Parent 1':
-                if v.has_curr_variant == 'high_qual':
-                    if first_parent_1 in [None, x]:
-                        first_parent_1 = x
-                    else:
-                        parent_1s_disagree = True
-                if v.has_curr_variant != 'absent':
-                    parent_1_file = v 
-            elif v.family_rel == 'Parent 2':
-                if v.has_curr_variant == 'high_qual':
-                    if first_parent_2 in [None, x]:
-                        first_parent_2 = x
-                    else:
-                        parent_2s_disagree = True
-                if v.has_curr_variant != 'absent':
-                    parent_2_file = v
-            else:  # v.family_rel == 'Child':
-                if v.has_curr_variant == 'high_qual':
-                    if first_child in [None, x]:
-                        first_child = x
-                    else:
-                        children_disagree = True
-                if v.has_curr_variant != 'absent':
-                    child_file = v
-    # if some absent and some high-qual, internal disagreement
-    par_1_curr_variant = [
-        v.has_curr_variant for v in vcf_file_objs if 
-        v.family_rel == 'Parent 1'
-    ]
-    if 'absent' in par_1_curr_variant and 'high_qual' in par_1_curr_variant:
-        parent_1s_disagree = True
-    par_2_curr_variant = [
-        v.has_curr_variant for v in vcf_file_objs if 
-        v.family_rel == 'Parent 2'
-    ]
-    if 'absent' in par_2_curr_variant and 'high_qual' in par_2_curr_variant:
-        parent_2s_disagree
-    child_curr_variant = [
-        v.has_curr_variant for v in vcf_file_objs if 
-        v.family_rel == 'Child'
-    ]
-    if 'absent' in child_curr_variant and 'high_qual' in child_curr_variant:  
-        children_disagree = True
-
-    if parent_1s_disagree or parent_2s_disagree or children_disagree:
+    family_rels = ['Parent 1', 'Parent 2', 'Child']
+    example_files = {}
+    conflict_exists = False
+    for family_rel in family_rels:
+        example_files[family_rel] = None
+        for x in files_per_variant:
+            for v in files_per_variant[x]:
+                if (
+                    v.family_rel == family_rel and
+                    v.has_curr_variant != 'absent'
+                ):
+                    example_files[family_rel] = v
+        if internal_conflict_exists(
+            vcf_file_objs, family_rel, files_per_variant
+        ):
+            conflict_exists = True
+    if conflict_exists:
         cat = 'Internal conflict'
+        subcat = 'NA'
     else:
         cat, subcat = inheritance(
-            parent_1_file.curr_call.gt_type if parent_1_file else 0, 
-            parent_2_file.curr_call.gt_type if parent_2_file else 0,
-            child_file.curr_call.gt_type if child_file else 0
+            *[example_files[family_rel] for family_rel in family_rels], pos=pos
         )
-    if cat in ['Inherited', 'Invalid']:
-        inheritance_out_str = '%s - %s' % (cat, subcat)
-    else:
-        inheritance_out_str = cat
-    out_str = (
-        '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n' %
+    out_all.write(
+        '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f'
+        '\t%.2f\n' %
         (
-            chrom, str(pos), ref, alt, gt, inheritance_out_str, 
-            variant_in_file_str, percent_present, qc_averages['qd'], 
-            qc_averages['dp'], qc_averages['qual'], qc_averages['ad0'], 
+            chrom, str(pos), ref, alt, gt, cat, subcat,
+            variant_in_file_str, percent_present, qc_averages['qd'],
+            qc_averages['dp'], qc_averages['qual'], qc_averages['ad0'],
             qc_averages['ad1']
         )
     )
-    out_files['all'].write(out_str)
     overall_counts[cat] += 1
     if cat == 'Inherited':
         overall_counts[subcat] += 1
@@ -554,14 +479,38 @@ def output_ref_alt_gt(
     # update plot data
     if args.create_qc_plots:
         update_qc_counts(
-            ave_qc_vals(ref_alt_gt_files), qc_counts, len(files_per_variant), 
+            ave_qc_vals(ref_alt_gt_files), qc_counts, len(files_per_variant),
             cat
         )
+
+
+def internal_conflict_exists(vcf_file_objs, family_rel, files_per_variant):
+    """Returns whether there is an internal conflict within files with
+    given family_rel."""
+    conflict_exists = False
+    first_instance = None
+    for x in files_per_variant:  # x == ref, alt, gt
+        for v in files_per_variant[x]:
+            if v.family_rel == family_rel:
+                if v.has_curr_variant == 'high_qual':
+                    if first_instance in [None, x]:
+                        first_instance = x
+                    else:
+                        conflict_exists = True
+    curr_variants = [
+        v.has_curr_variant for v in vcf_file_objs if
+        v.family_rel == family_rel
+    ]
+    if 'absent' in curr_variants and 'high_qual' in curr_variants:
+        conflict_exists = True
+    return conflict_exists
+
 
 def update_qc_counts(ave_qc_vals, qc_counts, count_ref_alt_objs, categ):
     """Update qc_counts dict."""
     for qc_cat in ave_qc_vals:
         intervals = qc_counts[qc_cat]['All']
+        # normalize by number of distinct ref/alt/gt combinations
         qc_val = ave_qc_vals[qc_cat] / count_ref_alt_objs
         for x in intervals:
             if qc_val >= x:
@@ -588,13 +537,8 @@ def ave_qc_vals(vcf_file_objs):
 
 
 def min_chromosome(chroms):
-    """
-    Args:
-        chroms (list of str): Chromosome names ['chrN', 'chrP', ...].
-
-    Returns:
-        str: Name of chromosome which would appear first in ordered
-        file.
+    """Args: Chromosome names ['chrN', 'chrP', ...]. Returns name of
+    chromosome which would appear first in ordered file.
     """
     chroms_processed = list(chroms)
     for i in xrange(len(chroms_processed)):
@@ -723,7 +667,7 @@ def output_qc_plot(
     """Create QC plot using pyplot. Save plot to out_filename."""
     plt.clf()
     for categ in qc_categories:
-        if categ != 'All':
+        if categ != 'All' and qc_counts[categ][0]:
             plt.plot(intervals, [
                 (
                     1.0 - (float(qc_counts[categ][n]) / qc_counts[categ][0])
@@ -743,11 +687,12 @@ def output_qc_plot(
     plt.savefig(out_filename)
 
 
-def inheritance(parent1, parent2, child):
-    """Child's relationship to parents. Args: VCF files."""
-    # gt type 0: hom ref / absent from file, 1: het, 2: hom alt, 
-    # [None: missing]
-
+def inheritance(parent1_file, parent2_file, child_file, pos):
+    """Child's relationship to parents. Args: VCF file objects.
+    Returns inheritance category and subcategory.
+    VCF file obj representative of category. Assumes no internal
+    conflicts
+    """
     de_novo_label = 'De novo'
     invalid_label = 'Invalid'
     inherited_label = 'Inherited'
@@ -755,70 +700,215 @@ def inheritance(parent1, parent2, child):
     cat = inherited_label
     subcat = 'NA'
 
-    if child == 0:
-        if parent1 not in [0, 1] or parent2 not in [0, 1]:
-            cat = invalid_label
-            subcat = 'Child HOM-REF; parents not both HOM-REF/ HET'
-    elif child == 1:
-        if parent1 + parent2 == 0 or parent1 + parent2 == 4:
-            cat = invalid_label
-            subcat = 'Child HET; parents both HOM-REF or both HOM-ALT'
-    elif child == 2:
-        if not (parent1 in [1, 2] and parent2 in [1, 2]):
-            cat = invalid_label
-            subcat = 'Child HOM-ALT, parents not both HET/ HOM-ALT'
-    else:
-        cat = invalid_label
-        subcat = 'Unknown/ invalid child GT'
+    d = {
+        'parent1': {'file': parent1_file}, 'parent2': {'file': parent2_file},
+        'child': {'file': child_file}
+    }
+    for family_rel in d:
+        if d[family_rel]['file']:
+            d[family_rel]['ref'] = str(d[family_rel]['file'].curr_rec.REF)
+            d[family_rel]['alt'] = str(d[family_rel]['file'].curr_rec.ALT[0])
+            if d[family_rel]['file'].curr_call.gt_type == 1:
+                d[family_rel]['gt'] = 'HET'
+            elif d[family_rel]['file'].curr_call.gt_type == 2:
+                d[family_rel]['gt'] = 'HOM-ALT'
+            else:
+                d[family_rel]['gt'] = None
+        else:
+            d[family_rel]['ref'] = None
+            d[family_rel]['alt'] = None
+            d[family_rel]['gt'] = 'HOM-REF'
 
-    if parent1 + parent2 == 0:
-        # if child == 0:
-        #     cat = 'Parents HOM-REF, HOM-REF; child HOM-REF'
-        if child != 0:
-            cat = de_novo_label
-    elif parent1 + parent2 == 1:
-        if child == 0:
-            subcat = 'Parents HOM-REF, HET; child HOM-REF'
-        elif child == 1:
-            subcat = 'Parents HOM-REF, HET; child HET'
-        else:
-            cat = invalid_label
-            subcat = 'Parents HOM-REF, HET; child not HOM-REF/ HET'
-    elif (parent1 == 0 and parent2 == 2) or (parent1 == 2 and parent2 == 0):
-        if child == 1:
-            subcat = 'Parents HOM-REF, HOM-ALT; child HET'
-        else:
-            cat = invalid_label
-            subcat = 'Parents HOM-REF, HOM-ALT; child not HET'
-    elif parent1 == 1 and parent2 == 1:
-        if child == 0:
-            subcat = 'Parents HET, HET; child HOM-REF'
-        elif child == 1:
-            subcat = 'Parents HET, HET; child HET'
-        elif child == 2:
-            subcat = 'Parents HET, HET; child HOM-ALT'
+    for x in d:
+        if d[x]['gt'] != 'HOM-REF':
+            chrom = d[x]['file'].curr_rec.CHROM
+            pos = d[x]['file'].curr_rec.POS
+    refs, alts = [], []
+    for family_rel in d:
+        v = d[family_rel]['file']
+        if (v is not None and v.has_curr_variant == 'high_qual'):
+            alts.append(str(v.curr_rec.ALT[0]))
+            refs.append(str(v.curr_rec.REF))
+
+    # process variants for which there is a ref or alt conflict between
+    # parent1 and parent2, or parent1 and child, or parent2 and child
+    if len(set(refs)) > 1:
+        cat = '?'
+        subcat = 'Child/ parent REFs don\'t match'
+    elif len(set(alts)) > 1:
+        if d['child']['gt'] == 'HOM-REF':
+            if (
+                d['parent1']['gt'] in ['HOM-REF', 'HET'] and
+                d['parent2']['gt'] in ['HOM-REF', 'HET']
+            ):
+                cat = inherited_label
+                subcat = 'Parents %s, %s; child HOM-REF' % ordered_gts(
+                    d['parent1']['gt'], d['parent2']['gt']
+                )
+            else:
+                cat = invalid_label
+                subcat = 'Child HOM-REF; parents not both HOM-REF/ HET'
+        elif d['child']['gt'] == 'HET':
+            if (
+                (
+                    d['child']['alt'] == d['parent1']['alt'] and
+                    d['parent1']['gt'] in ['HET', 'HOM-ALT'] and
+                    d['parent2']['gt'] in ['HOM-REF', 'HET']
+                ) or
+                (
+                    d['child']['alt'] == d['parent2']['alt'] and
+                    d['parent2']['gt'] in ['HET', 'HOM-ALT'] and
+                    d['parent1']['gt'] in ['HOM-REF', 'HET']
+                )
+            ):
+                cat = inherited_label
+                subcat = 'Parents %s, %s; child HET' % ordered_gts(
+                    d['parent1']['gt'], d['parent2']['gt']
+                )
+            elif (
+                d['parent1']['gt'] == 'HOM-REF' and
+                d['parent2']['gt'] == 'HOM-REF'
+            ):
+                cat = de_novo_label
+            else:
+                cat = invalid_label
+                subcat = (
+                    'Child HET; not the case that one parent has '
+                    'child ALT and other parent has REF'
+                )
+        elif d['child']['gt'] == 'HOM-ALT':
+            if (
+                d['parent1']['gt'] == 'HOM-REF' and
+                d['parent2']['gt'] == 'HOM-REF'
+            ):
+                cat = de_novo_label
+            else:
+                cat = invalid_label
+                subcat = (
+                    'Child HOM-ALT; parents not both HET/ HOM-ALT for '
+                    'child ALT allele'
+                )
         else:
             cat = invalid_label
             subcat = 'Unknown/ invalid child GT'
-    elif parent1 + parent2 == 3:
-        if child == 1:
-            subcat = 'Parents HET, HOM-ALT; child HET'
-        elif child == 2:
-            subcat = 'Parents HET, HOM-ALT; child HOM-ALT'
-        else:
-            cat = invalid_label
-            subcat = 'Parents HET, HOM-ALT; child not HET/ HOM-ALT'
-    elif parent1 + parent2 == 4:
-        if child == 2:
-            subcat = 'Parents HOM-ALT, HOM-ALT; child HOM-ALT'
-        else:
-            cat = invalid_label
-            subcat = 'Parents HOM-ALT, HOM-ALT; child not HOM-ALT'
+
     else:
-        cat = invalid_label
-        subcat = 'Unknown/ invalid parent GT(s)'
+        if d['child']['gt'] == 'HOM-REF':
+            if (
+                d['parent1']['gt'] not in ['HOM-REF', 'HET'] or
+                d['parent2']['gt'] not in ['HOM-REF', 'HET']
+            ):
+                cat = invalid_label
+                subcat = 'Child HOM-REF; parents not both HOM-REF/ HET'
+        elif d['child']['gt'] == 'HET':
+            if (
+                d['parent1']['gt'] == 'HOM-ALT' and
+                d['parent2']['gt'] == 'HOM-ALT'
+            ):
+                cat = invalid_label
+                subcat = 'Child HET; parents both HOM-ALT'
+        elif d['child']['gt'] == 'HOM-ALT':
+            if not (
+                d['parent1']['gt'] in ['HET', 'HOM-ALT'] and
+                d['parent2']['gt'] in ['HET', 'HOM-ALT']
+            ):
+                cat = invalid_label
+                subcat = 'Child HOM-ALT; parents not both HET/ HOM-ALT'
+        else:
+            cat = invalid_label
+            subcat = 'Unknown/ invalid child GT'
+        if cat != inherited_label:
+            return (cat, subcat)
+
+        if (
+            d['parent1']['gt'] == 'HOM-REF' and
+            d['parent2']['gt'] == 'HOM-REF'
+        ):
+            if d['child']['gt'] == 'HOM-REF':
+                subcat = 'Parents HOM-REF, HOM-REF; child HOM-REF'
+            else:
+                cat = de_novo_label
+        elif (
+            (
+                d['parent1']['gt'] == 'HOM-REF' and
+                d['parent2']['gt'] == 'HET'
+            ) or (
+                d['parent1']['gt'] == 'HET' and
+                d['parent2']['gt'] == 'HOM-REF'
+            )
+        ):
+            if d['child']['gt'] == 'HOM-REF':
+                subcat = 'Parents HOM-REF, HET; child HOM-REF'
+            elif d['child']['gt'] == 'HET':
+                subcat = 'Parents HOM-REF, HET; child HET'
+            else:
+                cat = invalid_label
+                subcat = 'Parents HOM-REF, HET; child not HOM-REF/ HET'
+        elif (
+            (
+                d['parent1']['gt'] == 'HOM-REF' and
+                d['parent2']['gt'] == 'HOM-ALT'
+            ) or (
+                d['parent1']['gt'] == 'HOM-ALT' and
+                d['parent2']['gt'] == 'HOM-REF')
+        ):
+            if d['child']['gt'] == 'HET':
+                subcat = 'Parents HOM-REF, HOM-ALT; child HET'
+            else:
+                cat = invalid_label
+                subcat = 'Parents HOM-REF, HOM-ALT; child not HET'
+        elif (
+            d['parent1']['gt'] == 'HET' and
+            d['parent2']['gt'] == 'HET'
+        ):
+            if d['child']['gt'] == 'HOM-REF':
+                subcat = 'Parents HET, HET; child HOM-REF'
+            elif d['child']['gt'] == 'HET':
+                subcat = 'Parents HET, HET; child HET'
+            elif d['child']['gt'] == 'HOM-ALT':
+                subcat = 'Parents HET, HET; child HOM-ALT'
+            else:
+                cat = invalid_label
+                subcat = 'Unknown/ invalid child GT'
+        elif (
+            (
+                d['parent1']['gt'] == 'HET' and
+                d['parent2']['gt'] == 'HOM-ALT'
+            ) or (
+                d['parent1']['gt'] == 'HOM-ALT' and
+                d['parent2']['gt'] == 'HET'
+            )
+        ):
+            if d['child']['gt'] == 'HET':
+                subcat = 'Parents HET, HOM-ALT; child HET'
+            elif d['child']['gt'] == 'HOM-ALT':
+                subcat = 'Parents HET, HOM-ALT; child HOM-ALT'
+            else:
+                cat = invalid_label
+                subcat = 'Parents HET, HOM-ALT; child not HET/ HOM-ALT'
+        elif (
+            d['parent1']['gt'] == 'HOM-ALT' and
+            d['parent2']['gt'] == 'HOM-ALT'
+        ):
+            if d['child']['gt'] == 'HOM-ALT':
+                subcat = 'Parents HOM-ALT, HOM-ALT; child HOM-ALT'
+            else:
+                cat = invalid_label
+                subcat = 'Parents HOM-ALT, HOM-ALT; child not HOM-ALT'
+        else:
+            cat = invalid_label
+            subcat = 'Unknown/ invalid parent GT(s)'
 
     return (cat, subcat)
+
+
+def ordered_gts(gt1, gt2):
+    """Sorts two genotypes in ascending order"""
+    gts = ['HOM-REF', 'HET', 'HOM-ALT']
+    if gt1 not in gts or gt2 not in gts:
+        return (None, None)
+    return ((gt1, gt2) if (gts.index(gt1) < gts.index(gt2)) else (gt2, gt1))
+
 
 if __name__ == '__main__':
     main()
