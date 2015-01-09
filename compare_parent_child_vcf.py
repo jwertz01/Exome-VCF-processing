@@ -78,12 +78,15 @@ def main():
     overall_counts = {}
 
     # per-file statistics, in the order in which they will be displayed
-    # in html table
+    # in html table (categories starting with a capital letter are displayed).
+    # stored in counts dict in vcf file object.
     categories = [
-        'Total variants', 'High-quality variants',
-        'Homozygous reference', 'SNP', 'Heterozygous', 'Homozygous alternate',
-        'Indel', 'Missing', 'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A',
-        'G>C', 'G>T', 'T>A', 'T>C', 'T>G'
+        'Total variants', 'Average DP', 'Average QUAL', 
+        'High-quality variants', 'Homozygous reference', 'SNP', 
+        'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing', 
+        'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A','G>C', 'G>T', 'T>A',
+        'T>C', 'T>G', 'Predicted sex', 'total_x_dp', 'total_y_dp', 
+        'total_x_gt', 'total_y_gt', 'count_x', 'count_y', 
     ]
 
     # initialize readers, counts
@@ -126,8 +129,8 @@ def main():
     # fill in counts
     header = (
         'CHROM\tPOS\tREF\tALT\tGT\tInheritance_category\t'
-        'Inheritance_subcategory\t%s\t%%Present\tAve_QD'
-        '\tAve_DP\tAve_QUAL\tAve_AD0\tAve_AD1\n' %
+        'Inheritance_subcategory\t%s\t%%Present\tAvg_QD'
+        '\tAvg_DP\tAvg_QUAL\tAvg_AD0\tAvg_AD1\n' %
         ('\t'.join([v.file_name for v in vcf_file_objs]))
     )
     with open(args.out_all_variants, 'w') as out_all:
@@ -155,6 +158,15 @@ def main():
         )
 
     # output html stats file
+    for v in vcf_file_objs:
+        for category in v.counts:
+            if 'average' in category.lower():
+                v.counts[category] /= float(v.counts['Total variants'])
+        v.counts['Predicted sex'] = predict_sex(
+            v.counts['total_x_dp'], v.counts['total_y_dp'],
+            v.counts['total_x_gt'], v.counts['total_y_gt'],
+            v.counts['count_x'], v.counts['count_y']
+        )
     counts_norm = normalize_counts(
         categories, [v.counts for v in vcf_file_objs]
     )
@@ -173,8 +185,10 @@ def main():
             '(excluding total variants) are after quality filtering. '
             '</p>'
         )
+
         print_dict_list(
-            out_f, 'Counts Per File', counts_norm, categories,
+            out_f, 'Counts Per File',
+            counts_norm, [z for z in categories if z[0].isupper()],
             [v.file_name for v in vcf_file_objs], table_message
         )
         if len(multi_sample_files) > 0:
@@ -307,21 +321,18 @@ def compare_variants(
             v.curr_call = None
             record = v.next_rec
             call = record.genotype(v.reader.samples[0])
-            qd = record.INFO['QD']
-            dp = call['DP']
-            qual = record.QUAL
             if (
                 record.CHROM == min_chrom and record.POS == min_pos
                 and not v.eof
             ):
-                v.counts['Total variants'] += 1
-                is_high_qual = (
-                    qd >= args.min_qd and dp >= args.min_dp and
-                    qual >= args.min_qual
-                )
-                if is_high_qual:
+                update_counts_all(v.counts, record, call)
+                if (
+                    record.INFO['QD'] >= args.min_qd and
+                    call['DP'] >= args.min_dp and
+                    record.QUAL >= args.min_qual
+                ):
                     v.has_curr_variant = 'high_qual'
-                    update_counts(v.counts, v.reader, v.next_rec)
+                    update_counts_high_qual(v.counts, record, call)
                 else:
                     v.has_curr_variant = 'low_qual'
                 v.curr_call = call
@@ -339,6 +350,24 @@ def compare_variants(
         )
 
 
+def update_counts_all(counts, record, call):
+    qd = record.INFO['QD']
+    dp = call['DP']
+    qual = record.QUAL
+    chrom = record.CHROM
+    counts['Total variants'] += 1
+    counts['Average DP'] += dp
+    counts['Average QUAL'] += qual
+    if 'X' in chrom.upper():
+        counts['total_x_dp'] += dp
+        counts['total_x_gt'] += (0 if (call.gt_type == 1) else 1)
+        counts['count_x'] += 1
+    elif 'Y' in chrom.upper():
+        counts['total_y_dp'] += dp
+        counts['total_y_gt'] += (0 if (call.gt_type == 1) else 1)
+        counts['count_y'] += 1
+
+
 def process_variant(
     vcf_file_objs, qc_counts, overall_counts, args, out_all
 ):
@@ -348,17 +377,18 @@ def process_variant(
         vcf_file_objs
     ):
         return
-
     files_per_variant = {}     # (ref, alt, gt): list of VCF file objs
-    for v in vcf_file_objs:
-        if v.has_curr_variant != 'absent':
-            ref = str(v.curr_rec.REF)
-            alt = str(v.curr_rec.ALT[0])
-            gt = v.curr_call['GT']
-            if (ref, alt, gt) in files_per_variant:
-                files_per_variant[(ref, alt, gt)].append(v)
-            else:
-                files_per_variant[(ref, alt, gt)] = [v]
+    for v in [z for z in vcf_file_objs if z.has_curr_variant != 'absent']:
+        call = v.curr_call
+        record = v.curr_rec
+        ref = str(record.REF)
+        alt = str(record.ALT[0])
+        gt = call['GT']
+        if (ref, alt, gt) in files_per_variant:
+            files_per_variant[(ref, alt, gt)].append(v)
+        else:
+            files_per_variant[(ref, alt, gt)] = [v]
+
 
     # output each (ref, alt, gt) combination at given position on chromosome
     for x in files_per_variant:
@@ -479,7 +509,7 @@ def output_ref_alt_gt(
     # update plot data
     if args.create_qc_plots:
         update_qc_counts(
-            ave_qc_vals(ref_alt_gt_files), qc_counts, len(files_per_variant),
+            avg_qc_vals(ref_alt_gt_files), qc_counts, len(files_per_variant),
             cat
         )
 
@@ -506,18 +536,18 @@ def internal_conflict_exists(vcf_file_objs, family_rel, files_per_variant):
     return conflict_exists
 
 
-def update_qc_counts(ave_qc_vals, qc_counts, count_ref_alt_objs, categ):
+def update_qc_counts(avg_qc_vals, qc_counts, count_ref_alt, categ):
     """Update qc_counts dict."""
-    for qc_cat in ave_qc_vals:
+    for qc_cat in avg_qc_vals:
         intervals = qc_counts[qc_cat]['All']
         # normalize by number of distinct ref/alt/gt combinations
-        qc_val = ave_qc_vals[qc_cat] / count_ref_alt_objs
+        qc_val = avg_qc_vals[qc_cat] / count_ref_alt
         for x in intervals:
             if qc_val >= x:
                 qc_counts[qc_cat][categ][x] += 1
 
 
-def ave_qc_vals(vcf_file_objs):
+def avg_qc_vals(vcf_file_objs):
     """Returns dict containing average value for each QC category,
     among files with given family_rel (child/ parent1/ parent2)."""
     qc_vals = {}
@@ -551,7 +581,7 @@ def min_chromosome(chroms):
     return chroms[chroms_processed.index(min(chroms_processed))]
 
 
-def update_counts(counts, reader, record):
+def update_counts_high_qual(counts, record, call):
     """Update counts map given a VCF record. Assumes high-quality
     variant.
 
@@ -560,7 +590,6 @@ def update_counts(counts, reader, record):
         reader (VCF reader): VCF reader for file.
         record (VCF reader record): Specific VCF record.
     """
-    call = record.genotype(reader.samples[0])
     counts['High-quality variants'] += 1
     if call.gt_type == 1:
         counts['Heterozygous'] += 1
@@ -570,7 +599,6 @@ def update_counts(counts, reader, record):
         counts['Missing'] += 1
     else:
         counts['Homozygous reference'] += 1
-
     counts['Indel'] += record.is_indel
     is_snp = (1 if (record.is_snp and call.is_variant) else 0)
     counts['SNP'] += is_snp
@@ -637,26 +665,40 @@ def normalize_counts(categories, counts):
                 counts_norm[f][cat] = str(counts[f][cat]) + ' (%.2f)' % 1
             else:
                 if (
-                    (not isinstance(counts[f][cat], int)) or
-                    (isinstance(counts[f][cat], bool)) or
-                    (min_val == 0)
+                    isinstance(counts[f][cat], int) or 
+                    isinstance(counts[f][cat], float) and not
+                    isinstance(counts[f][cat], bool) and
+                    min_val != 0
                 ):
-                    continue
-                counts_norm[f][cat] = (
-                    counts[f][cat] / float(min_val) *
-                    (
-                        float(counts[min_index]['High-quality variants']) /
-                        counts[f]['High-quality variants']
-                    )
-                )
-                if abs(1.0 - counts_norm[f][cat]) < flag_dist:
                     counts_norm[f][cat] = (
-                        '%d (%.2f)' % (counts[f][cat], counts_norm[f][cat])
+                        counts[f][cat] / float(min_val) *
+                        (
+                            counts[min_index]['High-quality variants'] /
+                            float(counts[f]['High-quality variants'])
+                        )
                     )
-                else:
-                    counts_norm[f][cat] = (
-                        '%d (<font color = "blue">%.2f</font>)'
-                        % (counts[f][cat], counts_norm[f][cat])
+
+                    if abs(1.0 - counts_norm[f][cat]) < flag_dist:
+                        if isinstance(counts[f][cat], float):
+                            counts_norm[f][cat] = '%.2f (%.2f)' % (
+                            counts[f][cat], counts_norm[f][cat]
+                            )
+                        else:
+                            counts_norm[f][cat] = '%d (%.2f)' % (
+                                counts[f][cat], counts_norm[f][cat]
+                            )
+                    else:
+                        if isinstance(counts[f][cat], float):
+                            counts_norm[f][cat] = (
+                                '%.2f (<font color = "blue">%.2f</font>)' % (
+                                    counts[f][cat], counts_norm[f][cat]
+                                )
+                            )
+                        else:
+                            counts_norm[f][cat] = (
+                                '%d (<font color = "blue">%.2f</font>)' % (
+                                    counts[f][cat], counts_norm[f][cat]
+                            )
                     )
     return counts_norm
 
@@ -908,6 +950,28 @@ def ordered_gts(gt1, gt2):
     if gt1 not in gts or gt2 not in gts:
         return (None, None)
     return ((gt1, gt2) if (gts.index(gt1) < gts.index(gt2)) else (gt2, gt1))
+
+
+def predict_sex(
+    total_x_dp, total_y_dp, total_x_gt, total_y_gt, count_x, count_y
+):
+    """Predict whether individual is male or female based on 
+    X and Y chromosome variants. GT ranges from 0 (HET) to 1 (HOM-ALT).
+    """
+    avg_x_dp = float(total_x_dp)/ count_x
+    avg_y_dp = float(total_y_dp)/ count_y
+    avg_x_gt = float(total_x_gt)/ count_x
+    avg_y_gt = float(total_y_gt)/ count_y
+
+    female_score = 0
+    if avg_x_dp > 2 * avg_y_dp:
+        female_score += 1
+    if avg_x_gt < 0.65:
+        female_score += 1
+    if avg_y_gt > 0.8:
+        female_score += 1
+    print avg_x_dp, avg_x_gt, avg_y_dp, avg_y_gt, female_score
+    return ('F' if (female_score >= 2) else 'M')
 
 
 if __name__ == '__main__':
