@@ -81,12 +81,12 @@ def main():
     # in html table (categories starting with a capital letter are displayed).
     # stored in counts dict in vcf file object.
     categories = [
-        'Total variants', 'Average DP', 'Average QUAL', 
-        'High-quality variants', 'Homozygous reference', 'SNP', 
-        'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing', 
-        'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A','G>C', 'G>T', 'T>A',
-        'T>C', 'T>G', 'Predicted sex', 'total_x_dp', 'total_y_dp', 
-        'total_x_gt', 'total_y_gt', 'count_x', 'count_y', 
+        'Total variants', 'Average DP', 'Average QUAL',
+        'High-quality variants', 'Homozygous reference', 'SNP',
+        'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing',
+        'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 'G>C', 'G>T', 'T>A',
+        'T>C', 'T>G', 'Predicted sex', 'total_x_dp', 'total_y_dp',
+        'total_x_gt', 'total_y_gt', 'count_x', 'count_y',
     ]
 
     # initialize readers, counts
@@ -389,7 +389,6 @@ def process_variant(
         else:
             files_per_variant[(ref, alt, gt)] = [v]
 
-
     # output each (ref, alt, gt) combination at given position on chromosome
     for x in files_per_variant:
         output_ref_alt_gt(
@@ -665,7 +664,7 @@ def normalize_counts(categories, counts):
                 counts_norm[f][cat] = str(counts[f][cat]) + ' (%.2f)' % 1
             else:
                 if (
-                    isinstance(counts[f][cat], int) or 
+                    isinstance(counts[f][cat], int) or
                     isinstance(counts[f][cat], float) and not
                     isinstance(counts[f][cat], bool) and
                     min_val != 0
@@ -681,7 +680,7 @@ def normalize_counts(categories, counts):
                     if abs(1.0 - counts_norm[f][cat]) < flag_dist:
                         if isinstance(counts[f][cat], float):
                             counts_norm[f][cat] = '%.2f (%.2f)' % (
-                            counts[f][cat], counts_norm[f][cat]
+                                counts[f][cat], counts_norm[f][cat]
                             )
                         else:
                             counts_norm[f][cat] = '%d (%.2f)' % (
@@ -698,8 +697,8 @@ def normalize_counts(categories, counts):
                             counts_norm[f][cat] = (
                                 '%d (<font color = "blue">%.2f</font>)' % (
                                     counts[f][cat], counts_norm[f][cat]
+                                )
                             )
-                    )
     return counts_norm
 
 
@@ -955,13 +954,13 @@ def ordered_gts(gt1, gt2):
 def predict_sex(
     total_x_dp, total_y_dp, total_x_gt, total_y_gt, count_x, count_y
 ):
-    """Predict whether individual is male or female based on 
+    """Predict whether individual is male or female based on
     X and Y chromosome variants. GT ranges from 0 (HET) to 1 (HOM-ALT).
     """
-    avg_x_dp = float(total_x_dp)/ count_x
-    avg_y_dp = float(total_y_dp)/ count_y
-    avg_x_gt = float(total_x_gt)/ count_x
-    avg_y_gt = float(total_y_gt)/ count_y
+    avg_x_dp = float(total_x_dp) / count_x
+    avg_y_dp = float(total_y_dp) / count_y
+    avg_x_gt = float(total_x_gt) / count_x
+    avg_y_gt = float(total_y_gt) / count_y
 
     female_score = 0
     if avg_x_dp > 2 * avg_y_dp:
@@ -970,7 +969,6 @@ def predict_sex(
         female_score += 1
     if avg_y_gt > 0.8:
         female_score += 1
-    print avg_x_dp, avg_x_gt, avg_y_dp, avg_y_gt, female_score
     return ('F' if (female_score >= 2) else 'M')
 
 
