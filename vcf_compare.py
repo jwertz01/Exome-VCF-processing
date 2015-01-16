@@ -50,7 +50,8 @@ def main():
         'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing',
         'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 'G>C', 'G>T', 'T>A',
         'T>C', 'T>G', 'Variants absent from this file present in other files',
-        'Variants present that conflict with variants present in other files'
+        'Variants present that conflict with variants present in other files',
+        'Variants unique to this file'
     ]
 
     # Categories displayed in flowchart in HTML file
@@ -108,7 +109,7 @@ def main():
     # Iterate over vcf files, write variant comparison output files,
     # fill in counts
     header = (
-        'CHROM\tPOS\tREF\tALT\tGT\tCategory\t%s\t%%Present\tAvg_QD\tAvg_DP\t'
+        'CHROM\tPOS\tREF\tALT\tGT\t%s\t%%Present\tAvg_QD\tAvg_DP\t'
         'Avg_QUAL\tAvg_AD0\tAvg_AD1' %
         ('\t'.join([v.file_name for v in vcf_file_objs]))
     )
@@ -251,7 +252,7 @@ def parse_arguments(parser):
         help='Name of output file containing variants such that at least one '
              'file has high-quality variant and another file has different '
              'REF/ALT/GT at CHROM and POS. Excludes indels. (Default: '
-             'conflicts_multiple_vars.txt)'
+             'conflicts_multiple.txt)'
     )
     parser.add_argument(
         '--min_qd', type=int, default=3,
@@ -483,6 +484,11 @@ def output_ref_alt_gt(
     qc_averages = average_qc_values(ref_alt_gt_files)
     percent_present = 100.0 * len(ref_alt_gt_files) / len(vcf_file_objs)
 
+    multiple_variants = [
+        'high_qual' in [v.has_curr_variant for v in files_per_variant[x]]
+        for x in files_per_variant
+    ].count(True) > 1
+
     variant_in_file_str = ''
     for v in vcf_file_objs:
         if (
@@ -495,6 +501,23 @@ def output_ref_alt_gt(
         variant_in_file_str += '\t'
     variant_in_file_str = variant_in_file_str[:-1]
 
+    for v in ref_alt_gt_files:
+        if (
+            v.has_curr_variant == 'high_qual' and percent_present != 100
+            and multiple_variants
+        ):
+            v.counts[
+                'Variants present that conflict with variants present '
+                'in other files'
+            ] += 1
+        if (v.has_curr_variant == 'high_qual' and len(ref_alt_gt_files) == 1):
+            v.counts['Variants unique to this file'] += 1
+
+    for v in [z for z in vcf_file_objs if z not in ref_alt_gt_files]:
+        v.counts[
+            'Variants absent from this file present in other files'
+        ] += 1
+
     out_str = (
         '%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n'
         % (
@@ -503,11 +526,6 @@ def output_ref_alt_gt(
             qc_averages['qual'], qc_averages['ad0'], qc_averages['ad1']
         )
     )
-
-    multiple_variants = [
-        'high_qual' in [v.has_curr_variant for v in files_per_variant[x]]
-        for x in files_per_variant
-    ].count(True) > 1
 
     # Output variant to files and update overall counts.
     overall_counts['Pass QC'] += 1
