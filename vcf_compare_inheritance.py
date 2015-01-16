@@ -982,12 +982,16 @@ def predict_sex(
     """Predict whether individual is male or female based on
     X and Y chromosome variants. GT ranges from 0 (HET) to 1 (HOM-ALT).
     """
-    avg_x_dp, avg_x_gt = None, None if (count_x == 0) else (
-        float(total_x_dp) / count_x, float(total_x_gt) / count_x
-    )
-    avg_y_dp, avg_y_gt = None, None if (count_y == 0) else (
-        float(total_y_dp) / count_y, float(total_y_gt) / count_y
-    )
+    if count_x == 0:
+        avg_x_dp, avg_x_gt = None, None
+    else:
+        avg_x_dp = float(total_x_dp) / count_x
+        avg_x_gt = float(total_x_gt) / count_x
+    if count_y == 0:
+        avg_y_dp, ave_y_gt = None, None
+    else:
+        avg_y_dp = float(total_y_dp) / count_y
+        avg_y_gt = float(total_y_gt) / count_y
 
     female_score, male_score = 0, 0
     if avg_x_dp and avg_y_dp:
