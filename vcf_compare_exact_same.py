@@ -14,7 +14,7 @@ class VcfFile(object):
         reader=None, curr_rec=None, next_rec=None, curr_call=None,
         eof=False, has_curr_variant='absent', family_rel=None,
         curr_qc_values=None, is_rediscovery_file=False,
-        sites_that_differ=None, vars_unique=None, vars_absent=None
+        sites_that_differ=None, unique_vars=None, absent_vars=None
     ):
         self.file_name = file_name
         self.file_ = file_
@@ -31,9 +31,9 @@ class VcfFile(object):
         self.is_rediscovery_file = is_rediscovery_file
         # Site: how site differs from others (string: string dict)
         self.sites_that_differ = sites_that_differ
-        self.vars_unique = vars_unique  # Variants in this file not in others
+        self.unique_vars = unique_vars  # Variants in this file not in others
         # Variants in other files not in this file
-        self.vars_absent = vars_absent
+        self.absent_vars = absent_vars
 
     def __str__(self):
         return (
@@ -56,13 +56,12 @@ def main():
     multi_sample_files = []  # Names of multi-sample VCF files
     vcf_file_objs = []
     empty_files = []
-    header = ''  # First line of variant output file
-    initialize_files(
-        multi_sample_files, vcf_file_objs, empty_files, args,
-        counts_per_file_categs, header
-    )
+
     with open(args.out_all_variants, 'w') as out_all:
-        out_all.write(header)
+        initialize_files(
+            multi_sample_files, vcf_file_objs, empty_files, args,
+            counts_per_file_categs, out_all
+        )
         compare_variants(vcf_file_objs, args, out_all)
 
     for v in vcf_file_objs:
@@ -128,7 +127,7 @@ def check_extension(filename, extension):
 
 def initialize_files(
     multi_sample_files, vcf_file_objs, empty_files, args,
-    counts_per_file_categs, header
+    counts_per_file_categs, out_all
 ):
     """Create and initialize VcfFile objects and output file."""
 
@@ -146,13 +145,6 @@ def initialize_files(
         'Variants absent from this file present in other files',
 
     ]
-    # First line of variant output file
-    header = (
-        'CHROM\tPOS\tREF\tALT\tGT\t%s\t%%Present\tAvg_QD\tAvg_DP\t'
-        'Avg_QUAL\tAvg_AD0\tAvg_AD1\n' %
-        ('\t'.join([v.file_name for v in vcf_file_objs]))
-    )
-
     for f_name in args.rediscovery_files:
         counts_per_file_categs.append(
             'Rediscovery rate (non-indels): %s' % f_name
@@ -169,8 +161,8 @@ def initialize_files(
         else:
             v = VcfFile(
                 file_name=f_base_name, file_=in_f, counts={}, reader=reader,
-                curr_qc_values={}, sites_that_differ={}, vars_unique=[],
-                vars_absent=[]
+                curr_qc_values={}, sites_that_differ={}, unique_vars=[],
+                absent_vars=[]
             )
             try:
                 v.next_rec = reader.next()
@@ -184,6 +176,13 @@ def initialize_files(
                 empty_files.append(f_base_name)
             if f_name in args.rediscovery_files:
                 v.is_rediscovery_file = True
+    # First line of variant output file
+    header = (
+        'CHROM\tPOS\tREF\tALT\tGT\t%s\t%%Present\tAvg_QD\tAvg_DP\t'
+        'Avg_QUAL\tAvg_AD0\tAvg_AD1\n' %
+        ('\t'.join([v.file_name for v in vcf_file_objs]))
+    )
+    out_all.write(header)
 
 
 def compare_variants(vcf_file_objs, args, out_all):
@@ -309,7 +308,7 @@ def update_counts_all(counts, qc_values):
         counts['total_dp'] += qc_values['dp']
         counts['count_dp'] += 1
     if qc_values['qual'] >= 0:
-        max_qual = 1000000  # exclude outliers
+        max_qual = 1000000  # Exclude outliers
         if qc_values['qual'] > max_qual:
             print 'excluding QUAL outlier: %d' % qc_values['qual']
             counts['total_qual'] += max_qual
@@ -365,8 +364,7 @@ def process_variant(vcf_file_objs, args, out_all):
             else:
                 files_per_variant[(ref, alt, gt)] = [v]
 
-    # Output each (REF, ALT, GT) combination at given position
-    # on chromosome
+    # Output each (REF, ALT, GT) combination at given position on chromosome
     for x in files_per_variant:
         output_ref_alt_gt(
             x, out_all, vcf_file_objs, args, files_per_variant
@@ -393,6 +391,18 @@ def output_ref_alt_gt(
     )
     variant_in_file_str = ''
     for v in vcf_file_objs:
+        if ref_alt_gt_files == [v]:
+            v.counts['Variants unique to this file'] += 1
+            v.unique_vars.append(
+                '%s %s %s %s %s' % (chrom, str(pos), ref, alt, gt)
+            )
+        if v not in ref_alt_gt_files:
+            v.counts[
+                'Variants absent from this file present in other files'
+            ] += 1
+            v.absent_vars.append(
+                '%s %s %s %s %s' % (chrom, str(pos), ref, alt, gt)
+            )
         if (
                 v.has_curr_variant != 'absent' and
                 ref == str(v.curr_rec.REF) and
@@ -404,20 +414,6 @@ def output_ref_alt_gt(
             variant_in_file_str += 'absent'
         variant_in_file_str += '\t'
     variant_in_file_str = variant_in_file_str[:-1]
-
-    if len(ref_alt_gt_files) == 1:
-        v.counts['Variants unique to this file'] += 1
-        v.vars_unique.append(
-            '%s %s %s %s %s' % (chrom, str(pos), ref, alt, gt)
-        )
-
-    for v in [z for z in vcf_file_objs if z not in ref_alt_gt_files]:
-        v.counts[
-            'Variants absent from this file present in other files'
-        ] += 1
-        v.vars_absent.append(
-            '%s %s %s %s %s' % (chrom, str(pos), ref, alt, gt)
-        )
 
     out_str = (
         '%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n'
@@ -445,9 +441,9 @@ def average_qc_values(vcf_file_objs):
     for cat in qc_cats:
         qc_avgs[cat] = []
     for v in vcf_file_objs:
-        if v.has_curr_variant == 'high_qual':
-            for cat in v.curr_qc_values:
-                qc_avgs[cat].append(v.curr_qc_values[cat])
+        # if v.has_curr_variant == 'high_qual':
+        for cat in v.curr_qc_values:
+            qc_avgs[cat].append(v.curr_qc_values[cat])
 
     for cat in qc_cats:
         if None in qc_avgs[cat]:
@@ -659,18 +655,18 @@ def output_html_stats(
                 '<p><b>Empty/ invalid files excluded from ' +
                 'analysis: </b>%s</p>' % (', '.join(empty_files)))
         for v in vcf_file_objs:
-            if v.vars_unique:
+            if v.unique_vars:
                 out_f.write(
                     '<p><b>Variants unique to %s (CHROM, POS, REF, ALT, GT):'
                     '<br /></b> %s</p>' % (
-                        v.file_name, '<br />'.join(v.vars_unique)
+                        v.file_name, '<br />'.join(v.unique_vars)
                     )
                 )
-            if v.vars_absent:
+            if v.absent_vars:
                 out_f.write(
                     '<p><b>Variants absent from %s (CHROM, POS, REF, ALT, '
                     'GT):<br /></b> %s</p>' % (
-                        v.file_name, '<br />'.join(v.vars_absent)
+                        v.file_name, '<br />'.join(v.absent_vars)
                     )
                 )
         out_f.write('</body></html>')
