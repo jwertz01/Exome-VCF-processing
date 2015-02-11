@@ -135,7 +135,7 @@ def initialize_files(
     # Per-file statistics, in the order in which they will be displayed
     # in HTML table. (Categories starting with a capital letter are
     # displayed.) Stored in counts dict in VcfFile object.
-    counts_per_file_categs = [
+    counts_per_file_categs += [
         'Total variants', 'Average DP', 'Average QUAL', 'average QD',
         'total_dp', 'count_dp', 'total_qual', 'count_qual', 'total_qd',
         'count_qd', 'High-quality variants', 'Homozygous reference', 'SNP',
