@@ -142,8 +142,7 @@ def initialize_files(
         'a>c', 'a>g', 'a>t', 'c>a', 'c>g', 'c>t', 'g>a', 'g>c', 'g>t', 't>a',
         't>c', 't>g', 'Transitions/ transversions',
         'Variants unique to this file',
-        'Variants absent from this file present in other files',
-
+        'Variants absent from this file present in other files'
     ]
     for f_name in args.rediscovery_files:
         counts_per_file_categs.append(
@@ -255,23 +254,42 @@ def compare_variants(vcf_file_objs, args, out_all):
                     v.eof = True
             else:
                 v.has_curr_variant = 'absent'
-
-        if len(set([
-            (v.curr_rec.FILTER[0] if v.curr_rec.FILTER else 'NA')
-            for v in vcf_file_objs
-        ])) > 1:
-            for y in vcf_file_objs:
-                y.sites_that_differ['%s %d' % (min_chrom, min_pos)] = (
-                    'FILTER: %s<br />(QUAL: %s)' % (
-                        'LowQual' if (y.curr_rec.FILTER == ['LowQual'])
-                        else 'PASS',
-                        ('%.2f' % y.curr_rec.QUAL) if y.curr_rec.QUAL
-                        else 'None'
-                    )
-                )
-        # Write single variant (at min_chrom and min_pos) to output files,
-        # update counts
+        update_sites_that_differ(vcf_file_objs, min_chrom, min_pos)
         process_variant(vcf_file_objs, args, out_all)
+
+
+def update_sites_that_differ(vcf_file_objs, chrom, pos):
+    """Update dict of sites that differ between files."""
+    if len(set(
+        [v.has_curr_variant == 'absent' for v in vcf_file_objs]
+    )) > 1:
+        for y in vcf_file_objs:
+            y.sites_that_differ['%s %d' % (chrom, pos)] = (
+                'Variant %s<br />' % (
+                    'present' if y.has_curr_variant != 'absent'
+                    else 'absent'
+                )
+            )
+    if len(set([
+        (v.curr_rec.FILTER[0] if v.curr_rec.FILTER else 'NA')
+        for v in vcf_file_objs if v.has_curr_variant != 'absent'
+    ])) > 1:
+        for y in vcf_file_objs:
+            if y.has_curr_variant == 'absent':
+                continue
+            key = '%s %d' % (chrom, pos)
+            value = (
+                'FILTER: %s<br />(QUAL: %s)<br />' % (
+                    'LowQual' if (y.curr_rec.FILTER == ['LowQual'])
+                    else 'PASS',
+                    ('%.2f' % y.curr_rec.QUAL) if y.curr_rec.QUAL
+                    else 'None'
+                )
+            )
+            if key in y.sites_that_differ:
+                y.sites_that_differ[key] += '<br />%s' % value
+            else:
+                y.sites_that_differ[key] = value
 
 
 def assign_qc_values(qc_values_dict, record, call):
