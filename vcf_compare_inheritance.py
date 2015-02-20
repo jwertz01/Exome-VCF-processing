@@ -12,10 +12,10 @@ import vcf
 class VcfFile(object):
     """Contains info about VCF file, and current position in file."""
     def __init__(
-        self, file_name=None, file_=None, counts=None,
-        reader=None, curr_rec=None, next_rec=None, curr_call=None,
-        eof=False, has_curr_variant='absent', family_rel=None,
-        curr_qc_values=None
+        self, file_name=None, file_=None, counts=None, reader=None,
+        curr_rec=None, next_rec=None, curr_call=None, eof=False,
+        has_curr_variant='absent', family_rel=None, curr_qc_values=None,
+        is_rediscovery_file=False
     ):
         self.file_name = file_name
         self.file_ = file_
@@ -28,14 +28,17 @@ class VcfFile(object):
         self.has_curr_variant = has_curr_variant   # Absent/low_qual/high_qual
         self.family_rel = family_rel  # Parent 1/Parent 2/Child
         self.curr_qc_values = curr_qc_values  # DP, QUAL, etc. for current var
+        self.is_rediscovery_file = is_rediscovery_file
 
     def __str__(self):
         return (
             'Filename: %s\nCounts: %s\nCurr rec: %s\nNext rec: %s\nEOF: %s'
-            '\nHas curr variant: %s\nCurr QC values: %s\n' %
+            '\nHas curr variant: %s\nCurr QC values: %s\nIs rediscovery '
+            'file: %s\n' %
             (
                 self.file_name, self.counts, self.curr_rec, self.next_rec,
-                self.eof, self.has_curr_variant, self.curr_qc_values
+                self.eof, self.has_curr_variant, self.curr_qc_values,
+                self.is_rediscovery_file
             )
         )
 
@@ -43,27 +46,31 @@ class VcfFile(object):
 def main():
     parser = argparse.ArgumentParser()
     args = parse_arguments(parser)
-    validate(args, parser)
-    if (
-        args.parent_1_file_names is None or
-        args.parent_2_file_names is None or
-        args.child_file_names is None
-    ):
-        raise ValueError(
-            'Parent 1, Parent 2, and Child file names must be specified.'
-        )
+    args.min_qc_values = {
+        'dp': args.min_dp, 'qd': args.min_qd, 'qual': args.min_qual
+    }
+    validate_args(args, parser)
 
     # Per-file statistics, in the order in which they will be displayed
     # in HTML table. (Categories starting with a capital letter are
     # displayed.) Stored in counts dict in VcfFile object.
     counts_per_file_categs = [
-        'Total variants', 'Average DP', 'Average QUAL',
-        'High-quality variants', 'Homozygous reference', 'SNP',
+        'Total variants', 'Average DP', 'Average QUAL', 'average QD',
+        'total_dp', 'count_dp', 'total_qual', 'count_qual', 'total_qd',
+        'count_qd', 'High-quality variants', 'Homozygous reference', 'SNP',
         'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing',
-        'A>C', 'A>G', 'A>T', 'C>A', 'C>G', 'C>T', 'G>A', 'G>C', 'G>T', 'T>A',
-        'T>C', 'T>G', 'Predicted sex', 'total_x_dp', 'total_y_dp',
-        'total_x_gt', 'total_y_gt', 'count_x', 'count_y',
+        'a>c', 'a>g', 'a>t', 'c>a', 'c>g', 'c>t', 'g>a', 'g>c', 'g>t', 't>a',
+        't>c', 't>g', 'Transitions/ transversions', 'Predicted sex',
+        'total_x_dp', 'total_y_dp', 'total_x_gt', 'total_y_gt', 'count_x',
+        'count_y', 'Variants absent from this file present in other files',
+        'Variants present that conflict with variants present in other files',
+        'Variants unique to this file'
     ]
+    for f_name in args.rediscovery_files:
+        counts_per_file_categs.append(
+            'Rediscovery rate (non-indels): %s' % f_name
+        )
+        counts_per_file_categs.append('rediscovery_count_%s' % f_name)
 
     # Categories displayed in flowchart in HTML file
     overall_counts_categs = [
@@ -95,6 +102,7 @@ def main():
     # Initialize readers, counts
     multi_sample_files = []  # Names of multi-sample VCF files
     vcf_file_objs = []
+    empty_files = []
     for f_name in (
         args.parent_1_file_names + args.parent_2_file_names +
         args.child_file_names
@@ -107,19 +115,29 @@ def main():
             in_f.close()
         else:
             v = VcfFile(
-                file_=in_f, counts={}, reader=reader, next_rec=reader.next(),
-                curr_qc_values={}
+                file_=in_f, counts={}, reader=reader, curr_qc_values={}
             )
+            try:
+                v.next_rec = reader.next()
+            except StopIteration:
+                v.eof = True
+
             if f_name in args.parent_1_file_names:
                 v.family_rel = 'Parent 1'
             elif f_name in args.parent_2_file_names:
                 v.family_rel = 'Parent 2'
             else:
                 v.family_rel = 'Child'
+
             for cat in counts_per_file_categs:
                 v.counts[cat] = 0
             v.file_name = '%s (%s)' % (f_base_name, v.family_rel)
-            vcf_file_objs.append(v)
+            if v.reader and v.next_rec:
+                vcf_file_objs.append(v)
+            else:
+                empty_files.append(f_base_name)
+            if f_name in args.rediscovery_files:
+                v.is_rediscovery_file = True
 
     if args.create_qc_plots:
         for i in qc_intervals:
@@ -147,9 +165,27 @@ def main():
 
     for v in vcf_file_objs:
         v.file_.close()
-        for category in v.counts:
-            if 'average' in category.lower():
-                v.counts[category] /= float(v.counts['Total variants'])
+        if v.is_rediscovery_file:
+            continue
+
+        v.counts['Average DP'] = divide(
+            v.counts['total_dp'], v.counts['count_dp'], -1.0
+        )
+        v.counts['Average QUAL'] = divide(
+            v.counts['total_qual'], v.counts['count_qual'], -1.0
+        )
+        v.counts['Average QD'] = divide(
+            v.counts['total_qd'], v.counts['count_qd'], -1.0
+        )
+        for y in [z for z in vcf_file_objs if z.is_rediscovery_file]:
+            v.counts[
+                'Rediscovery rate (non-indels): %s' % y.file_name
+            ] = divide(
+                v.counts['rediscovery_count_%s' % y.file_name],
+                v.counts['SNP'], -1
+            )
+        v.counts['Transitions/ transversions'] = ts_tv_ratio(v.counts)
+
         v.counts['Predicted sex'] = predict_sex(
             v.counts['total_x_dp'], v.counts['total_y_dp'],
             v.counts['total_x_gt'], v.counts['total_y_gt'],
@@ -173,42 +209,71 @@ def main():
 
     # Output HTML stats file
     counts_norm = normalize_counts(
-        counts_per_file_categs, [v.counts for v in vcf_file_objs]
+        counts_per_file_categs, 
+        [v.counts for v in vcf_file_objs if not v.is_rediscovery_file]
     )
     with open(args.out_stats, 'w') as out_f:
         page_title = 'VCF Comparison'
         out_f.write(
             '<!DOCTYPE html><html><head><title>%s</title></head><body>'
-            '<h1>%s</h1>' % (page_title, page_title)
-        )
-        table_message = (
-            '<p>Counts per unique combination of CHROM and POS. </p>'
-            '<p>Normalized with respect to the number of '
-            'high-quality variants, and to the value in the leftmost '
-            'numeric column. Normalized values less than 0.95 or '
-            'greater than 1.05 are shown in blue. Counts shown '
-            '(excluding total variants) are after quality filtering. '
-            '</p>'
+            '<h1>%s</h1><br />' % (page_title, page_title)
         )
 
-        print_dict_list(
-            out_f, 'Counts Per File', counts_norm,
-            [z for z in counts_per_file_categs if z[0].isupper()],
-            [v.file_name for v in vcf_file_objs], table_message
+        categs_pre_filter = ['Total variants', 'Average DP', 'Average QUAL']
+
+        # per unique combination of CHROM and POS
+        categs_post_filter_1 = [
+            'High-quality variants', 'Homozygous reference', 'SNP',
+            'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing',
+            'Transitions/ transversions', 'Predicted sex'
+        ]
+        for f_name in args.rediscovery_files:
+            categs_post_filter_1.append(
+                'Rediscovery rate (non-indels): %s' % f_name
         )
+
+        # per unique combination of CHROM, POS, REF, ALT, GT
+        categs_post_filter_2 = [
+            'Variants absent from this file present in other files',
+            'Variants present that conflict with variants present in other files',
+            'Variants unique to this file'
+        ]
+
+        print_dict_list(
+            out_f, 'Statistics per file, all variants,<br />per unique '
+            'combination of CHROM and POS:', counts_norm, categs_pre_filter,
+            [v.file_name for v in vcf_file_objs if not v.is_rediscovery_file]
+        )
+        print_dict_list(
+            out_f, 'Statistics per file, high-quality variants only,<br />'
+            'per unique combination of CHROM and POS:', counts_norm,
+            categs_post_filter_1,
+            [v.file_name for v in vcf_file_objs if not v.is_rediscovery_file]
+        )
+        # print_dict_list(
+        #     out_f, 'Statistics per file, high-quality variants only,<br />'
+        #     'per unique combination of CHROM, POS, REF, ALT, and GT:',
+        #     counts_norm, categs_post_filter_2,
+        #     [v.file_name for v in vcf_file_objs if not v.is_rediscovery_file]
+        # )
         if len(multi_sample_files) > 0:
             out_f.write(
-                '<p><b>Multi-sample files excluded from '
-                'analysis: </b>%s</p>' % (', '.join(multi_sample_files))
-            )
+                '<p><b>Multi-sample files excluded from ' +
+                'analysis: </b>%s</p>' % (', '.join(multi_sample_files)))
+        if len(empty_files) > 0:
+            out_f.write(
+                '<p><b>Empty/ invalid files excluded from ' +
+                'analysis: </b>%s</p>' % (', '.join(empty_files)))
         out_f.write(
-            '<h2>Overall Counts Per Unique Combination of CHROM, POS, '
-            'REF, ALT, and GT</h2>'
+            '<h2>Overall statistics, high-quality variants only,<br />'
+            'per unique combination of CHROM, POS, REF, ALT, and GT:</h2>'
         )
         out_f.write(
             '<p>Each category (except Pass QC) is a subcategory of the '
             'rightmost category directly above it.</p>'
         )
+
+        # Output overall counts flowchart
         out_f.write(
             '<table style="table-layout:fixed; width:'
             '%dpx; word-wrap:break-word"><tr>' % 2000
@@ -225,6 +290,14 @@ def main():
             )
         out_f.write('</tr></table>')
         out_f.write('</body></html>')
+
+
+def divide(num, denom, default):
+    """Return numerator divided by denominator"""
+    if denom > 0:
+        return float(num) / denom
+    else:
+        return default
 
 
 def parse_arguments(parser):
@@ -245,6 +318,12 @@ def parse_arguments(parser):
         '--create_qc_plots', action='store_true',
         help='Whether to output QC plots. Takes no arguments. '
              '(Default: Does not output plots.)'
+    )
+    parser.add_argument(
+        '--rediscovery_files', nargs='+', default = [],
+        help='Names of VCF files to be used for '
+             'calculating rediscovery rate. (Default: Does not '
+             'calculate rediscovery rate.)'
     )
     parser.add_argument(
         '--out_stats', default='vcf_stats.html',
@@ -295,12 +374,12 @@ def parse_arguments(parser):
     return parser.parse_args()
 
 
-def validate(args, parser):
+def validate_args(args, parser):
     """Validate command line arguments."""
     message = ''
     for x in (
         args.parent_1_file_names + args.parent_2_file_names +
-        args.child_file_names
+        args.child_file_names + args.rediscovery_files
     ):
         message += check_extension(x, '.vcf')
     message += check_extension(args.out_stats, '.html')
@@ -309,6 +388,15 @@ def validate(args, parser):
     if message != '':  # Error has occurred
         parser.print_help()
         raise ValueError(message[:-1])
+
+    if (
+        args.parent_1_file_names is None or
+        args.parent_2_file_names is None or
+        args.child_file_names is None
+    ):
+        raise ValueError(
+            'Parent 1, Parent 2, and Child file names must be specified.'
+        )
 
 
 def check_extension(filename, extension):
@@ -322,16 +410,12 @@ def check_extension(filename, extension):
 
 
 def compare_variants(
-    vcf_file_objs, qc_counts, overall_counts, args, out_all
+    vcf_file_objs, qc_counts, overall_counts, args, out_files
 ):
     """Iterate through all VCF files simultaneously. Write per-file
     variant info to output files and update overall statistics
     (counts).
     """
-    for v in vcf_file_objs:
-        if (v.reader is None) or (v.next_rec is None) or (v.counts == {}):
-            return
-
     min_chrom = min_chromosome(
         [v.next_rec.CHROM for v in vcf_file_objs if not v.eof]
     )
@@ -343,35 +427,71 @@ def compare_variants(
         if new_min_chrom != min_chrom:
             print 'Processing %s...' % new_min_chrom
             min_chrom = new_min_chrom
-        min_pos = min(
-            [
-                v.next_rec.POS for v in vcf_file_objs if
-                v.next_rec.CHROM == min_chrom and not v.eof
-            ]
-        )
+        min_pos = min([
+            v.next_rec.POS for v in vcf_file_objs if (
+                parse_chromosome(v.next_rec.CHROM) == parse_chromosome(
+                    min_chrom
+                ) and (not v.eof)
+            )
+        ])
         for v in vcf_file_objs:
+            if (v.reader is None) or (v.next_rec is None) or (v.counts == {}):
+                continue
             v.curr_rec = v.next_rec
             v.curr_call = None
             record = v.next_rec
-            call = record.genotype(v.reader.samples[0])
+            if v.reader.samples:
+                call = record.genotype(v.reader.samples[0])
+            else:
+                call = None
             if (
-                record.CHROM == min_chrom and record.POS == min_pos
+                parse_chromosome(record.CHROM) == parse_chromosome(min_chrom)
+                and record.POS == min_pos
                 and not v.eof
             ):
-                assign_qc_values(v.curr_qc_values, record, call)
-                update_counts_all(v.curr_qc_values, v.counts, record, call)
-                if (
-                    v.curr_qc_values['qd'] >= args.min_qd and
-                    v.curr_qc_values['dp'] >= args.min_dp and
-                    v.curr_qc_values['qual'] >= args.min_qual
-                ):
-                    v.has_curr_variant = 'high_qual'
-                    update_counts_high_qual(v.counts, record, call)
+                if call:
+                    assign_qc_values(v.curr_qc_values, record, call)
+                    update_counts_all(v.counts, v.curr_qc_values)
+
+                    # count as high-quality if qc values are unknown
+                    is_high_qual = True
+                    for qc_param in args.min_qc_values:
+                        if (
+                            v.curr_qc_values[qc_param] >= 0 and (
+                                v.curr_qc_values[qc_param] <
+                                args.min_qc_values[qc_param]
+                            )
+                        ):
+                            is_high_qual = False
+                    v.curr_call = call
+                
+                    if is_high_qual:
+                        v.has_curr_variant = 'high_qual'
+                        update_counts_high_qual(
+                            v.counts, v.curr_qc_values, record, call
+                        )
+                        
+                        for y in vcf_file_objs:
+                            if (
+                                y.is_rediscovery_file and 
+                                parse_chromosome(
+                                    y.next_rec.CHROM
+                                ) == parse_chromosome(min_chrom) and 
+                                y.next_rec.POS == min_pos and
+                                not record.is_indel
+                            ):
+                                v.counts[
+                                    'rediscovery_count_%s' % y.file_name
+                                ] += 1
+                    else:
+                        v.has_curr_variant = 'low_qual'
                 else:
-                    v.has_curr_variant = 'low_qual'
-                v.curr_call = call
+                    v.has_curr_variant = 'present'
+                    v.counts['Total variants'] += 1
+                    v.counts['High-quality variants'] += 1
                 try:
                     v.next_rec = v.reader.next()
+
                 except StopIteration:
                     v.eof = True
             else:
@@ -380,35 +500,56 @@ def compare_variants(
         # Write single variant (at min_chrom and min_pos) to output files,
         # update counts
         process_variant(
-            vcf_file_objs, qc_counts, overall_counts, args, out_all
+            vcf_file_objs, qc_counts, overall_counts, args, out_files
         )
 
 
 def assign_qc_values(qc_values_dict, record, call):
     """Assign QC values to dict, given current record and call."""
-    qc_values_dict['qd'] = record.INFO['QD']
-    qc_values_dict['dp'] = call['DP']
-    qc_values_dict['qual'] = record.QUAL
-    qc_values_dict['ad0'] = call['AD'][0]
-    qc_values_dict['ad1'] = call['AD'][1]
+    try:
+        qc_values_dict['qd'] = record.INFO['QD']
+    except (KeyError, AttributeError):
+        qc_values_dict['qd'] = -1.0
+    try:
+        qc_values_dict['dp'] = call['DP']
+    except (KeyError, AttributeError):
+        try:
+            qc_values_dict['dp'] = record.INFO['DP']
+        except (KeyError, AttributeError):
+            qc_values_dict['dp'] = -1.0
+    try:
+        qc_values_dict['qual'] = record.QUAL
+    except (KeyError, AttributeError):
+        qc_values_dict['qual'] = -1.0
+    try:
+        qc_values_dict['ad0'] = call['AD'][0]
+    except (KeyError, AttributeError):
+        qc_values_dict['ad0'] = -1
+    try:
+        qc_values_dict['ad1'] = call['AD'][1]
+    except (KeyError, AttributeError):
+        qc_values_dict['ad1'] = -1
 
 
-def update_counts_all(qc_values, counts, record, call):
+def update_counts_all(counts, qc_values):
     """Update counts dict for a variant."""
     counts['Total variants'] += 1
-    counts['Average DP'] += qc_values['dp']
-    counts['Average QUAL'] += qc_values['qual']
-    if 'X' in record.CHROM.upper():
-        counts['total_x_dp'] += qc_values['dp']
-        counts['total_x_gt'] += (0 if (call.gt_type == 1) else 1)
-        counts['count_x'] += 1
-    elif 'Y' in record.CHROM.upper():
-        counts['total_y_dp'] += qc_values['dp']
-        counts['total_y_gt'] += (0 if (call.gt_type == 1) else 1)
-        counts['count_y'] += 1
+    if qc_values['dp'] >= 0:
+        counts['total_dp'] += qc_values['dp']
+        counts['count_dp'] += 1
+    if qc_values['qual'] >= 0:
+        max_qual = 1000000  # Exclude outliers
+        if qc_values['qual'] > max_qual:
+            counts['total_qual'] += max_qual
+        else:
+            counts['total_qual'] += qc_values['qual']
+        counts['count_qual'] += 1
+    if qc_values['qd'] >= 0:
+        counts['total_qd'] += qc_values['qd']
+        counts['count_qd'] += 1
 
 
-def update_counts_high_qual(counts, record, call):
+def update_counts_high_qual(counts, qc_values, record, call):
     """Update counts dict for a high-quality variant."""
     counts['High-quality variants'] += 1
     if call.gt_type == 1:
@@ -424,12 +565,23 @@ def update_counts_high_qual(counts, record, call):
     is_snp = (1 if (record.is_snp and call.is_variant) else 0)
     counts['SNP'] += is_snp
     if is_snp:
-        counts[
-            '%s>%s' % (
-                record.alleles[0],
-                record.alleles[int(max(call.gt_alleles))]
-            )
-        ] += 1
+        snp_type = '%s>%s' % (
+            record.alleles[0],
+            record.alleles[int(max(call.gt_alleles))]
+        )
+        if snp_type.lower() in counts:
+            counts[snp_type.lower()] += 1
+        else:
+            counts[snp_type.lower()] = 1
+
+    if 'X' in record.CHROM.upper():
+        counts['total_x_dp'] += qc_values['dp']
+        counts['total_x_gt'] += (0 if (call.gt_type == 1) else 1)
+        counts['count_x'] += 1
+    elif 'Y' in record.CHROM.upper():
+        counts['total_y_dp'] += qc_values['dp']
+        counts['total_y_gt'] += (0 if (call.gt_type == 1) else 1)
+        counts['count_y'] += 1
 
 
 def process_variant(
@@ -441,17 +593,24 @@ def process_variant(
         v.has_curr_variant == 'high_qual' for v in vcf_file_objs
     )
     files_per_variant = {}     # (REF, ALT, GT): list of VCF file objs
+
     if high_qual_present:
-        for v in [z for z in vcf_file_objs if z.has_curr_variant != 'absent']:
-            call = v.curr_call
-            record = v.curr_rec
-            ref = str(record.REF)
-            alt = str(record.ALT[0])
-            gt = call['GT']
-            if (ref, alt, gt) in files_per_variant:
-                files_per_variant[(ref, alt, gt)].append(v)
-            else:
-                files_per_variant[(ref, alt, gt)] = [v]
+        for v in vcf_file_objs:
+            if v.has_curr_variant in ['low_qual', 'high_qual']:
+                chrom = parse_chromosome(v.curr_rec.CHROM)
+                pos = v.curr_rec.POS
+        for v in vcf_file_objs:
+            if v.has_curr_variant in ['low_qual', 'high_qual']:
+                call = v.curr_call
+                record = v.curr_rec
+                ref = str(record.REF)
+                alt = str(record.ALT[0])
+                gt = call['GT']
+
+                if (ref, alt, gt) in files_per_variant:
+                    files_per_variant[(ref, alt, gt)].append(v)
+                else:
+                    files_per_variant[(ref, alt, gt)] = [v]
 
     # Find internal disagreements within Parent 1 files/
     # Parent 2 files/ Child files
@@ -485,6 +644,16 @@ def process_variant(
         cat, subcat = inheritance(
             *[example_files[family_rel] for family_rel in family_rels]
         )
+
+    # Output each (REF, ALT, GT) combination at given position on chromosome
+    if high_qual_present:
+        for x in files_per_variant:
+            output_ref_alt_gt(
+                vcf_file_objs, qc_counts, overall_counts, args, out_all, x,
+                files_per_variant, cat, subcat
+            )
+
+    # Update plot data
     if args.create_qc_plots:
         for v in vcf_file_objs:
             if cat != '[Indel]' and v.has_curr_variant != 'absent':
@@ -494,14 +663,6 @@ def process_variant(
                         v.has_curr_variant != 'absent'
                     ])
                 )
-
-    # Output each (REF, ALT, GT) combination at given position on chromosome
-    if high_qual_present:
-        for x in files_per_variant:
-            output_ref_alt_gt(
-                vcf_file_objs, qc_counts, overall_counts, args, out_all, x,
-                files_per_variant, cat, subcat
-            )
 
 
 def output_ref_alt_gt(
@@ -519,20 +680,47 @@ def output_ref_alt_gt(
     ref, alt, gt = ref_alt_gt
 
     qc_averages = average_qc_values(ref_alt_gt_files)
-    percent_present = 100.0 * len(ref_alt_gt_files) / len(vcf_file_objs)
+    percent_present = divide(
+        100 * len(ref_alt_gt_files), 
+        len([z for z in vcf_file_objs if not z.is_rediscovery_file]), -1.0
+    )
 
-    # Output variant to file
+    multiple_variants = [
+        'high_qual' in [v.has_curr_variant for v in files_per_variant[x]]
+        for x in files_per_variant
+    ].count(True) > 1
+
     variant_in_file_str = ''
     for v in vcf_file_objs:
         if (
-            v.has_curr_variant != 'absent' and ref == str(v.curr_rec.REF) and
-            alt == str(v.curr_rec.ALT[0]) and gt == v.curr_call['GT']
+                v.has_curr_variant != 'absent' and
+                ref == str(v.curr_rec.REF) and
+                alt == str(v.curr_rec.ALT[0]) and
+                ((not v.curr_call) or (gt == v.curr_call['GT'])
+            )
         ):
             variant_in_file_str += v.has_curr_variant
         else:
             variant_in_file_str += 'absent'
         variant_in_file_str += '\t'
     variant_in_file_str = variant_in_file_str[:-1]
+
+    for v in ref_alt_gt_files:
+        if (
+            v.has_curr_variant == 'high_qual' and percent_present != 100
+            and multiple_variants
+        ):
+            v.counts[
+                'Variants present that conflict with variants present '
+                'in other files'
+            ] += 1
+        if (v.has_curr_variant == 'high_qual' and len(ref_alt_gt_files) == 1):
+            v.counts['Variants unique to this file'] += 1
+
+    for v in [z for z in vcf_file_objs if z not in ref_alt_gt_files]:
+        v.counts[
+            'Variants absent from this file present in other files'
+        ] += 1
 
     out_all.write(
         '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f'
@@ -606,51 +794,52 @@ def average_qc_values(vcf_file_objs):
                 qc_avgs[cat].append(v.curr_qc_values[cat])
 
     for cat in qc_cats:
-        qc_avgs[cat] = (
-            (float(sum(qc_avgs[cat])) / len(qc_avgs[cat])) if qc_avgs[cat]
-            else -1
-        )
+        if None in qc_avgs[cat]:
+            qc_avgs[cat] = -1
+        else:
+            qc_avgs[cat] = divide(sum(qc_avgs[cat]), len(qc_avgs[cat]), -1)
     return qc_avgs
 
 
 def min_chromosome(chroms):
-    """Args: Chromosome names ['chrN', 'chrP', ...]. Returns name of
+    """Args: Chromosome names ['chrN', 'chrP', ...]. Return name of
     chromosome which would appear first in ordered file.
     """
     alpha_chrom_order = ['X', 'Y', 'U', 'M']
-    chroms_processed = list(chroms)
-    for i in xrange(len(chroms_processed)):
-        chroms_processed[i] = (
-            chroms_processed[i][chroms_processed[i].index('chr')+3:]
-        )
-        try:
-            chroms_processed[i] = int(chroms_processed[i])
-        except ValueError:
-            pass
-
-    if any([isinstance(z, int) for z in chroms_processed]):
+    chroms_list = list(chroms)
+    for i in xrange(len(chroms_list)):
+        chroms_list[i] = parse_chromosome(chroms_list[i])
+    if any([isinstance(z, int) for z in chroms_list]):
         return 'chr%s' % min(
-            [y for y in chroms_processed if isinstance(y, int)]
+            [y for y in chroms_list if isinstance(y, int)]
         )
     else:
         first_letter = alpha_chrom_order[
-            min([alpha_chrom_order.index(z[0]) for z in chroms_processed])
+            min([alpha_chrom_order.index(z[0]) for z in chroms_list])
         ]
         return 'chr%s' % min(
-            [y for y in chroms_processed if y[0] == first_letter]
+            [y for y in chroms_list if y[0] == first_letter]
         )
 
 
-def print_dict_list(
-    out_f, table_title, dict_list, cats, header_list, table_message
-):
-    """Create HTML file and print a list of category:value
-    dictionaries as an HTML table.
+def parse_chromosome(chrom):
+    """Parse chromosome name."""
+    if chrom.startswith('chr'):
+        chrom = chrom[3:]
+    try:
+        chrom = int(chrom)
+    except ValueError:
+        pass
+    return chrom
+
+
+def print_dict_list(out_f, table_title, dict_list, cats, header_list):
+    """Create HTML file and print a list of category:value dictionaries
+    as an HTML table.
     """
     if len(dict_list) == 0:
         return
     out_f.write('<h2>%s</h2>' % table_title)
-    out_f.write(table_message)
     out_f.write(
         '<table border="1" style="table-layout:fixed; width:'
         '%dpx; word-wrap:break-word"><tr><th></th>' %
@@ -665,6 +854,7 @@ def print_dict_list(
             out_f.write('<td>%s</td>' % (d[cat]))
         out_f.write('</tr>')
     out_f.write('</table>')
+    out_f.write('<br />')
 
 
 def normalize_counts(categories, counts):
@@ -688,17 +878,28 @@ def normalize_counts(categories, counts):
                 counts_norm[f][cat] = str(counts[f][cat]) + ' (%.2f)' % 1
             else:
                 if (
-                    isinstance(counts[f][cat], int) or
-                    isinstance(counts[f][cat], float) and not
-                    isinstance(counts[f][cat], bool) and
-                    min_val != 0
+                    (
+                        isinstance(counts[f][cat], int) or
+                        isinstance(counts[f][cat], float) and not
+                        isinstance(counts[f][cat], bool) 
+                    ) and (counts[f]['High-quality variants'] > 0)
+                    and (counts[f][cat] > 0) and (min_val > 0)
                 ):
-                    counts_norm[f][cat] = (
-                        counts[f][cat] / float(min_val) *
-                        (
-                            counts[min_index]['High-quality variants'] /
-                            float(counts[f]['High-quality variants'])
-                        )
+                    # If normalization not relative to number of variants
+                    if (
+                        cat in [
+                            'Transitions/ transversions',
+                            'High-quality variants'
+                        ] or 'Rediscovery rate' in cat or 'Average' in cat
+                    ):
+                        counts_norm[f][cat] = counts[f][cat] / float(min_val)
+                    else:
+                        counts_norm[f][cat] = (
+                            counts[f][cat] / float(min_val) *
+                            (
+                                counts[min_index]['High-quality variants'] /
+                                float(counts[f]['High-quality variants'])
+                            )
                     )
 
                     if abs(1.0 - counts_norm[f][cat]) < flag_dist:
@@ -733,11 +934,12 @@ def output_qc_plot(
     plt.clf()
     for categ in qc_categories:
         if categ != 'All' and qc_counts[categ][0]:
-            plt.plot(intervals, [
-                (
-                    1.0 - (float(qc_counts[categ][n]) / qc_counts[categ][0])
-                ) for n in intervals
-            ], label=categ)
+            plt.plot(
+                intervals, [
+                    (1.0 - (float(qc_counts[categ][n]) / qc_counts[categ][0]))
+                    for n in intervals
+                ], label=categ
+            )
     plt.axis([0, max(intervals), 0, 1.05])
     plt.xlabel(qc_param_label)
     plt.ylabel('Fraction removed')
@@ -747,9 +949,17 @@ def output_qc_plot(
     ax.set_position([box.x0, box.y0, box.width * .75, box.height])
     ax.legend(
         [z for z in qc_categories if z != 'All'], loc='center left',
-        bbox_to_anchor=(1, .9), prop={'size': 11.5}
-    )
+        bbox_to_anchor=(1, .87))
     plt.savefig(out_filename)
+
+
+def ts_tv_ratio(counts):
+    """Calculate ratio of transitions / transversions."""
+    ts = ['a>g', 'g>a', 'c>t', 't>c']
+    tv = ['a>c', 'c>a', 'a>t', 't>a', 'c>g', 'g>c', 'g>t',  't>g']
+    return divide(
+        sum([counts[x] for x in ts]), sum([counts[y] for y in tv]), -1.0
+    )
 
 
 def inheritance(parent1_file, parent2_file, child_file):
@@ -988,7 +1198,7 @@ def predict_sex(
         avg_x_dp = float(total_x_dp) / count_x
         avg_x_gt = float(total_x_gt) / count_x
     if count_y == 0:
-        avg_y_dp, ave_y_gt = None, None
+        avg_y_dp, avg_y_gt = None, None
     else:
         avg_y_dp = float(total_y_dp) / count_y
         avg_y_gt = float(total_y_gt) / count_y
