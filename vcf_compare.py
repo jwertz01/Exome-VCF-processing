@@ -191,7 +191,7 @@ def main():
 
     # Output HTML stats file
     counts_norm = normalize_counts(
-        counts_per_file_categs, 
+        counts_per_file_categs,
         [v.counts for v in vcf_file_objs if not v.is_rediscovery_file]
     )
     with open(args.out_stats, 'w') as out_f:
@@ -212,12 +212,13 @@ def main():
         for f_name in args.rediscovery_files:
             categs_post_filter_1.append(
                 'Rediscovery rate (non-indels): %s' % f_name
-        )
+            )
 
         # per unique combination of CHROM, POS, REF, ALT, GT
         categs_post_filter_2 = [
             'Variants absent from this file present in other files',
-            'Variants present that conflict with variants present in other files',
+            'Variants present that conflict with variants present '
+            'in other files',
             'Variants unique to this file'
         ]
 
@@ -291,7 +292,7 @@ def parse_arguments(parser):
              '(Default: Does not output plots.)'
     )
     parser.add_argument(
-        '--rediscovery_files', nargs='+', default = [],
+        '--rediscovery_files', nargs='+', default=[],
         help='Names of VCF files to be used for '
              'calculating rediscovery rate. (Default: Does not '
              'calculate rediscovery rate.)'
@@ -443,13 +444,13 @@ def compare_variants(
                     if is_high_qual:
                         v.has_curr_variant = 'high_qual'
                         update_counts_high_qual(v.counts, record, call)
-                        
+
                         for y in vcf_file_objs:
                             if (
-                                y.is_rediscovery_file and 
+                                y.is_rediscovery_file and
                                 parse_chromosome(
                                     y.next_rec.CHROM
-                                ) == parse_chromosome(min_chrom) and 
+                                ) == parse_chromosome(min_chrom) and
                                 y.next_rec.POS == min_pos and
                                 not record.is_indel
                             ):
@@ -521,6 +522,7 @@ def update_counts_all(counts, qc_values):
         counts['total_qd'] += qc_values['qd']
         counts['count_qd'] += 1
 
+
 def update_counts_high_qual(counts, record, call):
     """Update counts dict for a high-quality variant."""
     counts['High-quality variants'] += 1
@@ -545,6 +547,7 @@ def update_counts_high_qual(counts, record, call):
             counts[snp_type.lower()] += 1
         else:
             counts[snp_type.lower()] = 1
+
 
 def process_variant(
     vcf_file_objs, qc_counts, overall_counts, args, out_files
@@ -591,7 +594,7 @@ def process_variant(
 
         all_agree = (
             all(
-                v.has_curr_variant != 'absent' for v in 
+                v.has_curr_variant != 'absent' for v in
                 vcf_file_objs
             ) and (not multiple_variants)
         )
@@ -636,13 +639,15 @@ def output_ref_alt_gt(
 
     qc_averages = average_qc_values(ref_alt_gt_files)
     percent_present = divide(
-        100 * len(ref_alt_gt_files), 
+        100 * len(ref_alt_gt_files),
         len([z for z in vcf_file_objs if not z.is_rediscovery_file]), -1.0
     )
 
     multiple_variants = [
-        'high_qual' in [v.has_curr_variant for v in files_per_variant[x]]
-        for x in files_per_variant
+        'high_qual' in [
+            v.has_curr_variant for v in files_per_variant[x] if not
+            v.is_rediscovery_file
+        ] for x in files_per_variant
     ].count(True) > 1
 
     variant_in_file_str = ''
@@ -651,8 +656,7 @@ def output_ref_alt_gt(
                 v.has_curr_variant != 'absent' and
                 ref == str(v.curr_rec.REF) and
                 alt == str(v.curr_rec.ALT[0]) and
-                ((not v.curr_call) or (gt == v.curr_call['GT'])
-            )
+                ((not v.curr_call) or (gt == v.curr_call['GT']))
         ):
             variant_in_file_str += v.has_curr_variant
         else:
@@ -669,13 +673,20 @@ def output_ref_alt_gt(
                 'Variants present that conflict with variants present '
                 'in other files'
             ] += 1
-        if (v.has_curr_variant == 'high_qual' and len(ref_alt_gt_files) == 1):
+        if (
+            v.has_curr_variant == 'high_qual' and len(
+                [z for z in ref_alt_gt_files if not z.is_rediscovery_file]
+            ) == 1
+        ):
             v.counts['Variants unique to this file'] += 1
 
-    for v in [z for z in vcf_file_objs if z not in ref_alt_gt_files]:
-        v.counts[
-            'Variants absent from this file present in other files'
-        ] += 1
+    for v in vcf_file_objs:
+        if v not in ref_alt_gt_files and any(
+            [not y.is_rediscovery_file for y in ref_alt_gt_files]
+        ):
+            v.counts[
+                'Variants absent from this file present in other files'
+            ] += 1
 
     out_str = (
         '%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n'
@@ -834,7 +845,7 @@ def write_ad_ratio(
                 if ad0 >= 0 and ad1 >= 0:
                     total_ad0 += ad0
                     total_ad1 += ad1
-    
+
     if total_ad0 >= 0:
         ad_ratio = divide(total_ad0, total_ad1, -1.0)
     else:
@@ -980,7 +991,7 @@ def normalize_counts(categories, counts):
                     (
                         isinstance(counts[f][cat], int) or
                         isinstance(counts[f][cat], float) and not
-                        isinstance(counts[f][cat], bool) 
+                        isinstance(counts[f][cat], bool)
                     ) and (counts[f]['High-quality variants'] > 0)
                     and (counts[f][cat] > 0) and (min_val > 0)
                 ):
@@ -999,7 +1010,7 @@ def normalize_counts(categories, counts):
                                 counts[min_index]['High-quality variants'] /
                                 float(counts[f]['High-quality variants'])
                             )
-                    )
+                        )
 
                     if abs(1.0 - counts_norm[f][cat]) < flag_dist:
                         if isinstance(counts[f][cat], float):
