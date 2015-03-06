@@ -699,27 +699,29 @@ def output_ref_alt_gt(
 
     # Output variant to files and update overall counts.
     overall_counts['Pass QC'] += 1
-    out_files['all'].write(out_str)
-    if percent_present == 100:
-        overall_counts['All agree'] += 1
-    else:
-        overall_counts['Conflicts'] += 1
-        if multiple_variants:
-            overall_counts['Conflicts multiple'] += 1
-            if True in [
-                v.curr_rec.is_indel for v in vcf_file_objs if
-                v.has_curr_variant != 'absent'
-            ]:
-                overall_counts['Conflicts multiple indel'] += 1
-            else:
-                overall_counts['Conflicts multiple no indel'] += 1
-                out_files['multiple'].write(out_str[:-1])
-                write_summary_conclusion(
-                    files_per_variant, out_files['multiple'], overall_counts
-                )
+    if any([(not z.is_rediscovery_file) for z in ref_alt_gt_files]):
+        out_files['all'].write(out_str)
+        if percent_present == 100:
+            overall_counts['All agree'] += 1
         else:
-            overall_counts['Conflicts absent'] += 1
-            out_files['absent'].write(out_str)
+            overall_counts['Conflicts'] += 1
+            if multiple_variants:
+                overall_counts['Conflicts multiple'] += 1
+                if True in [
+                    v.curr_rec.is_indel for v in vcf_file_objs if
+                    v.has_curr_variant != 'absent'
+                ]:
+                    overall_counts['Conflicts multiple indel'] += 1
+                else:
+                    overall_counts['Conflicts multiple no indel'] += 1
+                    out_files['multiple'].write(out_str[:-1])
+                    write_summary_conclusion(
+                        files_per_variant, out_files['multiple'],
+                        overall_counts
+                    )
+            else:
+                overall_counts['Conflicts absent'] += 1
+                out_files['absent'].write(out_str)
 
 
 def update_qc_counts(qc_counts, vcf_file_obj, cat, scale_factor):
