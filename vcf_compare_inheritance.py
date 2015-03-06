@@ -289,6 +289,14 @@ def main():
                 (x, overall_counts[x])
             )
         out_f.write('</tr></table>')
+        out_f.write(
+            '<br /><h3>Percent inherited (non-indel): %.2f%%</h3>' % (
+                100.0 * divide(
+                    overall_counts['Inherited'], overall_counts['No indel'],
+                    -1.0
+                )
+            )
+        )
         out_f.write('</body></html>')
 
 
@@ -714,13 +722,20 @@ def output_ref_alt_gt(
                 'Variants present that conflict with variants present '
                 'in other files'
             ] += 1
-        if (v.has_curr_variant == 'high_qual' and len(ref_alt_gt_files) == 1):
+        if (
+            v.has_curr_variant == 'high_qual' and len(
+                [z for z in ref_alt_gt_files if not z.is_rediscovery_file]
+            ) == 1
+        ):
             v.counts['Variants unique to this file'] += 1
 
-    for v in [z for z in vcf_file_objs if z not in ref_alt_gt_files]:
-        v.counts[
-            'Variants absent from this file present in other files'
-        ] += 1
+    for v in vcf_file_objs:
+        if v not in ref_alt_gt_files and any(
+            [not y.is_rediscovery_file for y in ref_alt_gt_files]
+        ):
+            v.counts[
+                'Variants absent from this file present in other files'
+            ] += 1
 
     out_all.write(
         '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f'
@@ -734,17 +749,18 @@ def output_ref_alt_gt(
     )
 
     # Update overall counts
-    overall_counts['Pass QC'] += 1
-    if True in [
-        v.curr_rec.is_indel for v in vcf_file_objs if
-        v.has_curr_variant != 'absent'
-    ]:
-        overall_counts['Indel'] += 1
-    else:
-        overall_counts['No indel'] += 1
-        overall_counts[cat] += 1
-        if cat == 'Inherited':
-            overall_counts[subcat] += 1
+    if any([(not z.is_rediscovery_file) for z in ref_alt_gt_files]):
+        overall_counts['Pass QC'] += 1
+        if True in [
+            v.curr_rec.is_indel for v in vcf_file_objs if
+            v.has_curr_variant != 'absent'
+        ]:
+            overall_counts['Indel'] += 1
+        else:
+            overall_counts['No indel'] += 1
+            overall_counts[cat] += 1
+            if cat == 'Inherited':
+                overall_counts[subcat] += 1
 
 
 def internal_conflict_exists(vcf_file_objs, family_rel, files_per_variant):
