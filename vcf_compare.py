@@ -698,8 +698,8 @@ def output_ref_alt_gt(
     )
 
     # Output variant to files and update overall counts.
-    overall_counts['Pass QC'] += 1
     if any([(not z.is_rediscovery_file) for z in ref_alt_gt_files]):
+        overall_counts['Pass QC'] += 1
         out_files['all'].write(out_str)
         if percent_present == 100:
             overall_counts['All agree'] += 1
