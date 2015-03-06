@@ -414,7 +414,9 @@ def output_ref_alt_gt(
             v.unique_vars.append(
                 '%s %s %s %s %s' % (chrom, str(pos), ref, alt, gt)
             )
-        if v not in ref_alt_gt_files:
+        if v not in ref_alt_gt_files and any(
+            [not y.is_rediscovery_file for y in ref_alt_gt_files]
+        ):
             v.counts[
                 'Variants absent from this file present in other files'
             ] += 1
@@ -441,7 +443,8 @@ def output_ref_alt_gt(
             qc_averages['qual'], qc_averages['ad0'], qc_averages['ad1']
         )
     )
-    out_all.write(out_str)
+    if any([(not z.is_rediscovery_file) for z in ref_alt_gt_files]):
+        out_all.write(out_str)
 
 
 def divide(num, denom, default):
