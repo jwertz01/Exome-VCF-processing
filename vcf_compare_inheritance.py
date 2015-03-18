@@ -50,7 +50,11 @@ def main():
         'dp': args.min_dp, 'qd': args.min_qd, 'qual': args.min_qual
     }
     validate_args(args, parser)
-
+    if args.vars_to_analyze:
+        with open(args.vars_to_analyze) as vars_:
+            vars_to_analyze = read_in_vars(vars_)
+    else:
+        vars_to_analyze = None
     # Per-file statistics, in the order in which they will be displayed
     # in HTML table. (Categories starting with a capital letter are
     # displayed.) Stored in counts dict in VcfFile object.
@@ -70,7 +74,9 @@ def main():
         counts_per_file_categs.append(
             'Rediscovery rate (non-indels): %s' % f_name
         )
-        counts_per_file_categs.append('rediscovery_count_%s' % f_name)
+        counts_per_file_categs.append(
+            'rediscovery_count_%s' % f_name
+        )
 
     # Categories displayed in flowchart in HTML file
     overall_counts_categs = [
@@ -105,7 +111,7 @@ def main():
     empty_files = []
     for f_name in (
         args.parent_1_file_names + args.parent_2_file_names +
-        args.child_file_names
+        args.child_file_names + args.rediscovery_files
     ):
         in_f = open(f_name)
         reader = vcf.Reader(in_f)
@@ -131,13 +137,15 @@ def main():
 
             for cat in counts_per_file_categs:
                 v.counts[cat] = 0
-            v.file_name = '%s (%s)' % (f_base_name, v.family_rel)
+            if f_name in args.rediscovery_files:
+                v.file_name = f_base_name
+                v.is_rediscovery_file = True
+            else:
+                v.file_name = '%s (%s)' % (f_base_name, v.family_rel)
             if v.reader and v.next_rec:
                 vcf_file_objs.append(v)
             else:
                 empty_files.append(f_base_name)
-            if f_name in args.rediscovery_files:
-                v.is_rediscovery_file = True
 
     if args.create_qc_plots:
         for i in qc_intervals:
@@ -160,7 +168,8 @@ def main():
     with open(args.out_all_variants, 'w') as out_all:
         out_all.write(header)
         compare_variants(
-            vcf_file_objs, qc_counts, overall_counts, args, out_all
+            vcf_file_objs, qc_counts, overall_counts, args, out_all,
+            vars_to_analyze
         )
 
     for v in vcf_file_objs:
@@ -209,7 +218,7 @@ def main():
 
     # Output HTML stats file
     counts_norm = normalize_counts(
-        counts_per_file_categs, 
+        counts_per_file_categs,
         [v.counts for v in vcf_file_objs if not v.is_rediscovery_file]
     )
     with open(args.out_stats, 'w') as out_f:
@@ -225,17 +234,20 @@ def main():
         categs_post_filter_1 = [
             'High-quality variants', 'Homozygous reference', 'SNP',
             'Heterozygous', 'Homozygous alternate', 'Indel', 'Missing',
-            'Transitions/ transversions', 'Predicted sex'
+            'Transitions/ transversions'
         ]
+        if not args.vars_to_analyze:
+            categs_post_filter_1.append('Predicted sex')
         for f_name in args.rediscovery_files:
             categs_post_filter_1.append(
                 'Rediscovery rate (non-indels): %s' % f_name
-        )
+            )
 
         # per unique combination of CHROM, POS, REF, ALT, GT
         categs_post_filter_2 = [
             'Variants absent from this file present in other files',
-            'Variants present that conflict with variants present in other files',
+            'Variants present that conflict with variants present '
+            'in other files',
             'Variants unique to this file'
         ]
 
@@ -323,12 +335,18 @@ def parse_arguments(parser):
         help='VCF filenames corresponding to child (required)'
     )
     parser.add_argument(
+        '--vars_to_analyze',
+        help='Name of tab-separated input file containing '
+             'CHROM (in first column) and POS (in second column) '
+             'of variants to analyze.'
+    )
+    parser.add_argument(
         '--create_qc_plots', action='store_true',
         help='Whether to output QC plots. Takes no arguments. '
              '(Default: Does not output plots.)'
     )
     parser.add_argument(
-        '--rediscovery_files', nargs='+', default = [],
+        '--rediscovery_files', nargs='+', default=[],
         help='Names of VCF files to be used for '
              'calculating rediscovery rate. (Default: Does not '
              'calculate rediscovery rate.)'
@@ -418,7 +436,8 @@ def check_extension(filename, extension):
 
 
 def compare_variants(
-    vcf_file_objs, qc_counts, overall_counts, args, out_files
+    vcf_file_objs, qc_counts, overall_counts, args, out_all,
+    vars_to_analyze
 ):
     """Iterate through all VCF files simultaneously. Write per-file
     variant info to output files and update overall statistics
@@ -442,6 +461,10 @@ def compare_variants(
                 ) and (not v.eof)
             )
         ])
+        if vars_to_analyze:
+            analyze_var = (min_chrom, str(min_pos)) in vars_to_analyze
+        else:
+            analyze_var = True
         for v in vcf_file_objs:
             if (v.reader is None) or (v.next_rec is None) or (v.counts == {}):
                 continue
@@ -454,62 +477,62 @@ def compare_variants(
                 call = None
             if (
                 parse_chromosome(record.CHROM) == parse_chromosome(min_chrom)
-                and record.POS == min_pos
-                and not v.eof
+                and record.POS == min_pos and not v.eof
             ):
-                if call:
-                    assign_qc_values(v.curr_qc_values, record, call)
-                    update_counts_all(v.counts, v.curr_qc_values)
+                if analyze_var:
+                    if call:
+                        assign_qc_values(v.curr_qc_values, record, call)
+                        update_counts_all(v.counts, v.curr_qc_values)
 
-                    # count as high-quality if qc values are unknown
-                    is_high_qual = True
-                    for qc_param in args.min_qc_values:
-                        if (
-                            v.curr_qc_values[qc_param] >= 0 and (
-                                v.curr_qc_values[qc_param] <
-                                args.min_qc_values[qc_param]
-                            )
-                        ):
-                            is_high_qual = False
-                    v.curr_call = call
-                
-                    if is_high_qual:
-                        v.has_curr_variant = 'high_qual'
-                        update_counts_high_qual(
-                            v.counts, v.curr_qc_values, record, call
-                        )
-                        
-                        for y in vcf_file_objs:
+                        # count as high-quality if qc values are unknown
+                        is_high_qual = True
+                        for qc_param in args.min_qc_values:
                             if (
-                                y.is_rediscovery_file and 
-                                parse_chromosome(
-                                    y.next_rec.CHROM
-                                ) == parse_chromosome(min_chrom) and 
-                                y.next_rec.POS == min_pos and
-                                not record.is_indel
+                                v.curr_qc_values[qc_param] >= 0 and (
+                                    v.curr_qc_values[qc_param] <
+                                    args.min_qc_values[qc_param]
+                                )
                             ):
-                                v.counts[
-                                    'rediscovery_count_%s' % y.file_name
-                                ] += 1
+                                is_high_qual = False
+                        v.curr_call = call
+
+                        if is_high_qual:
+                            v.has_curr_variant = 'high_qual'
+                            update_counts_high_qual(
+                                v.counts, v.curr_qc_values, record, call
+                            )
+
+                            for y in vcf_file_objs:
+                                if (
+                                    y.is_rediscovery_file and
+                                    parse_chromosome(
+                                        y.next_rec.CHROM
+                                    ) == parse_chromosome(min_chrom) and
+                                    y.next_rec.POS == min_pos and
+                                    not record.is_indel
+                                ):
+                                    v.counts[
+                                        'rediscovery_count_%s' % y.file_name
+                                    ] += 1
+                        else:
+                            v.has_curr_variant = 'low_qual'
                     else:
-                        v.has_curr_variant = 'low_qual'
-                else:
-                    v.has_curr_variant = 'present'
-                    v.counts['Total variants'] += 1
-                    v.counts['High-quality variants'] += 1
+                        v.has_curr_variant = 'present'
+                        v.counts['Total variants'] += 1
+                        v.counts['High-quality variants'] += 1
                 try:
                     v.next_rec = v.reader.next()
-
                 except StopIteration:
                     v.eof = True
-            else:
+            elif analyze_var:
                 v.has_curr_variant = 'absent'
 
         # Write single variant (at min_chrom and min_pos) to output files,
         # update counts
-        process_variant(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files
-        )
+        if analyze_var:
+            process_variant(
+                vcf_file_objs, qc_counts, overall_counts, args, out_all
+            )
 
 
 def assign_qc_values(qc_values_dict, record, call):
@@ -592,9 +615,7 @@ def update_counts_high_qual(counts, qc_values, record, call):
         counts['count_y'] += 1
 
 
-def process_variant(
-    vcf_file_objs, qc_counts, overall_counts, args, out_all
-):
+def process_variant(vcf_file_objs, qc_counts, overall_counts, args, out_all):
     """Process a variant uniquely identified by CHROM and POS.
     Find inheritance. Identify and process sub-variants."""
     high_qual_present = any(
@@ -657,8 +678,8 @@ def process_variant(
     if high_qual_present:
         for x in files_per_variant:
             output_ref_alt_gt(
-                vcf_file_objs, qc_counts, overall_counts, args, out_all, x,
-                files_per_variant, cat, subcat
+                vcf_file_objs, qc_counts, overall_counts, args, out_all,
+                x, files_per_variant, cat, subcat
             )
 
     # Update plot data
@@ -674,8 +695,8 @@ def process_variant(
 
 
 def output_ref_alt_gt(
-    vcf_file_objs, qc_counts, overall_counts, args, out_all, ref_alt_gt,
-    files_per_variant, cat, subcat
+    vcf_file_objs, qc_counts, overall_counts, args, out_all,
+    ref_alt_gt, files_per_variant, cat, subcat
 ):
     """Process a variant uniquely identified by combination of
     CHROM, POS, REF, ALT, and GT: Write to file, and update
@@ -689,7 +710,7 @@ def output_ref_alt_gt(
 
     qc_averages = average_qc_values(ref_alt_gt_files)
     percent_present = divide(
-        100 * len(ref_alt_gt_files), 
+        100 * len(ref_alt_gt_files),
         len([z for z in vcf_file_objs if not z.is_rediscovery_file]), -1.0
     )
 
@@ -704,8 +725,7 @@ def output_ref_alt_gt(
                 v.has_curr_variant != 'absent' and
                 ref == str(v.curr_rec.REF) and
                 alt == str(v.curr_rec.ALT[0]) and
-                ((not v.curr_call) or (gt == v.curr_call['GT'])
-            )
+                ((not v.curr_call) or (gt == v.curr_call['GT']))
         ):
             variant_in_file_str += v.has_curr_variant
         else:
@@ -897,7 +917,7 @@ def normalize_counts(categories, counts):
                     (
                         isinstance(counts[f][cat], int) or
                         isinstance(counts[f][cat], float) and not
-                        isinstance(counts[f][cat], bool) 
+                        isinstance(counts[f][cat], bool)
                     ) and (counts[f]['High-quality variants'] > 0)
                     and (counts[f][cat] > 0) and (min_val > 0)
                 ):
@@ -916,7 +936,7 @@ def normalize_counts(categories, counts):
                                 counts[min_index]['High-quality variants'] /
                                 float(counts[f]['High-quality variants'])
                             )
-                    )
+                        )
 
                     if abs(1.0 - counts_norm[f][cat]) < flag_dist:
                         if isinstance(counts[f][cat], float):
@@ -1242,6 +1262,17 @@ def predict_sex(
         return 'M'
     else:
         return 'No prediction'
+
+
+def read_in_vars(in_f):
+    vars_to_analyze = set()  # set of tuples
+    for row in in_f:
+        row = row.split('\t')
+        chr_ = row[0]
+        pos = row[1]
+        vars_to_analyze.add((chr_, pos))
+    return vars_to_analyze
+
 
 if __name__ == '__main__':
     sys.exit(main())
