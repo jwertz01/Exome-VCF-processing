@@ -47,6 +47,11 @@ def main():
         'dp': args.min_dp, 'qd': args.min_qd, 'qual': args.min_qual
     }
     validate_args(args, parser)
+    if args.vars_to_analyze:
+        with open(args.vars_to_analyze) as vars_:
+            vars_to_analyze = read_in_vars(vars_)
+    else:
+        vars_to_analyze = None
 
     # Per-file statistics, in the order in which they will be displayed
     # in HTML table. (Categories starting with a capital letter are
@@ -60,7 +65,8 @@ def main():
         't>c', 't>g', 'Transitions/ transversions',
         'Variants absent from this file present in other files',
         'Variants present that conflict with variants present in other files',
-        'Variants unique to this file'
+        'Variants unique to this file',
+        'Variants unique to this file (no indels)'
     ]
     for f_name in args.rediscovery_files:
         counts_per_file_categs.append(
@@ -139,16 +145,21 @@ def main():
     with \
             open(args.out_all_variants, 'w') as out_all, \
             open(args.out_absent, 'w') as out_absent, \
-            open(args.out_multiple, 'w') as out_multiple:
+            open(args.out_multiple, 'w') as out_multiple, \
+            open(args.out_unique, 'w') as out_unique:
         out_all.write(header + '\n')
         out_absent.write(header + '\n')
         out_multiple.write(header + '\tSummary\tConclusion\n')
+        out_unique.write(header + '\n')
+
         out_files = {
-            'all': out_all, 'absent': out_absent, 'multiple': out_multiple
+            'all': out_all, 'absent': out_absent, 'multiple': out_multiple,
+            'unique': out_unique
         }
 
         compare_variants(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files
+            vcf_file_objs, qc_counts, overall_counts, args, out_files,
+            vars_to_analyze
         )
 
     for v in vcf_file_objs:
@@ -219,7 +230,8 @@ def main():
             'Variants absent from this file present in other files',
             'Variants present that conflict with variants present '
             'in other files',
-            'Variants unique to this file'
+            'Variants unique to this file',
+            'Variants unique to this file (no indels)'
         ]
 
         print_dict_list(
@@ -303,6 +315,12 @@ def parse_arguments(parser):
              'statistics. (Default: vcf_stats.html)'
     )
     parser.add_argument(
+        '--vars_to_analyze',
+        help='Name of tab-separated input file containing '
+             'CHROM (in first column) and POS (in second column) '
+             'of variants to analyze.'
+    )
+    parser.add_argument(
         '--depth_plot', default='dp_plot.png',
         help='Name of output file containing read depth QC plot. '
              '(--create_qc_plots must be specified.) (Default: '
@@ -332,12 +350,16 @@ def parse_arguments(parser):
              'variant at CHROM and POS (Default: conflicts_absent.txt)'
     )
     parser.add_argument(
-        '--out_multiple',
-        default='conflicts_multiple.txt',
+        '--out_multiple', default='conflicts_multiple.txt',
         help='Name of output file containing variants such that at least one '
              'file has high-quality variant and another file has different '
              'REF/ALT/GT at CHROM and POS. Excludes indels. (Default: '
              'conflicts_multiple.txt)'
+    )
+    parser.add_argument(
+        '--out_unique', default='unique.txt',
+        help='Name of output file containing variants unique to any '
+             'particular input file.'
     )
     parser.add_argument(
         '--min_qd', type=int, default=0,
@@ -369,6 +391,7 @@ def validate_args(args, parser):
     message += check_extension(args.out_all_variants, '.txt')
     message += check_extension(args.out_absent, '.txt')
     message += check_extension(args.out_multiple, '.txt')
+    message += check_extension(args.out_unique, '.txt')
 
     if message != '':  # Error has occurred
         parser.print_help()
@@ -386,7 +409,8 @@ def check_extension(filename, extension):
 
 
 def compare_variants(
-    vcf_file_objs, qc_counts, overall_counts, args, out_files
+    vcf_file_objs, qc_counts, overall_counts, args, out_files,
+    vars_to_analyze
 ):
     """Iterate through all VCF files simultaneously. Write per-file
     variant info to output files and update overall statistics
@@ -410,6 +434,10 @@ def compare_variants(
                 ) and (not v.eof)
             )
         ])
+        if vars_to_analyze:
+            analyze_var = (min_chrom, str(min_pos)) in vars_to_analyze
+        else:
+            analyze_var = True
         for v in vcf_file_objs:
             if (v.reader is None) or (v.next_rec is None) or (v.counts == {}):
                 continue
@@ -425,57 +453,59 @@ def compare_variants(
                 and record.POS == min_pos
                 and not v.eof
             ):
-                if call:
-                    assign_qc_values(v.curr_qc_values, record, call)
-                    update_counts_all(v.counts, v.curr_qc_values)
+                if analyze_var:
+                    if call:
+                        assign_qc_values(v.curr_qc_values, record, call)
+                        update_counts_all(v.counts, v.curr_qc_values)
 
-                    # count as high-quality if qc values are unknown
-                    is_high_qual = True
-                    for qc_param in args.min_qc_values:
-                        if (
-                            v.curr_qc_values[qc_param] >= 0 and (
-                                v.curr_qc_values[qc_param] <
-                                args.min_qc_values[qc_param]
-                            )
-                        ):
-                            is_high_qual = False
-                    v.curr_call = call
-
-                    if is_high_qual:
-                        v.has_curr_variant = 'high_qual'
-                        update_counts_high_qual(v.counts, record, call)
-
-                        for y in vcf_file_objs:
+                        # count as high-quality if qc values are unknown
+                        is_high_qual = True
+                        for qc_param in args.min_qc_values:
                             if (
-                                y.is_rediscovery_file and
-                                parse_chromosome(
-                                    y.next_rec.CHROM
-                                ) == parse_chromosome(min_chrom) and
-                                y.next_rec.POS == min_pos and
-                                not record.is_indel
+                                v.curr_qc_values[qc_param] >= 0 and (
+                                    v.curr_qc_values[qc_param] <
+                                    args.min_qc_values[qc_param]
+                                )
                             ):
-                                v.counts[
-                                    'rediscovery_count_%s' % y.file_name
-                                ] += 1
+                                is_high_qual = False
+                        v.curr_call = call
+
+                        if is_high_qual:
+                            v.has_curr_variant = 'high_qual'
+                            update_counts_high_qual(v.counts, record, call)
+
+                            for y in vcf_file_objs:
+                                if (
+                                    y.is_rediscovery_file and
+                                    parse_chromosome(
+                                        y.next_rec.CHROM
+                                    ) == parse_chromosome(min_chrom) and
+                                    y.next_rec.POS == min_pos and
+                                    not record.is_indel
+                                ):
+                                    v.counts[
+                                        'rediscovery_count_%s' % y.file_name
+                                    ] += 1
+                        else:
+                            v.has_curr_variant = 'low_qual'
                     else:
-                        v.has_curr_variant = 'low_qual'
-                else:
-                    v.has_curr_variant = 'present'
-                    v.counts['Total variants'] += 1
-                    v.counts['High-quality variants'] += 1
+                        v.has_curr_variant = 'present'
+                        v.counts['Total variants'] += 1
+                        v.counts['High-quality variants'] += 1
                 try:
                     v.next_rec = v.reader.next()
 
                 except StopIteration:
                     v.eof = True
-            else:
+            elif analyze_var:
                 v.has_curr_variant = 'absent'
 
         # Write single variant (at min_chrom and min_pos) to output files,
         # update counts
-        process_variant(
-            vcf_file_objs, qc_counts, overall_counts, args, out_files
-        )
+        if analyze_var:
+            process_variant(
+                vcf_file_objs, qc_counts, overall_counts, args, out_files
+            )
 
 
 def assign_qc_values(qc_values_dict, record, call):
@@ -664,6 +694,11 @@ def output_ref_alt_gt(
         variant_in_file_str += '\t'
     variant_in_file_str = variant_in_file_str[:-1]
 
+    indel_present = True in [
+        v.curr_rec.is_indel for v in vcf_file_objs if
+        v.has_curr_variant != 'absent'
+    ]
+    is_unique = False
     for v in ref_alt_gt_files:
         if (
             v.has_curr_variant == 'high_qual' and percent_present != 100
@@ -679,7 +714,9 @@ def output_ref_alt_gt(
             ) == 1
         ):
             v.counts['Variants unique to this file'] += 1
-
+            is_unique = True
+            if not indel_present:
+                v.counts['Variants unique to this file (no indels)'] += 1
     for v in vcf_file_objs:
         if v not in ref_alt_gt_files and any(
             [not y.is_rediscovery_file for y in ref_alt_gt_files]
@@ -701,16 +738,15 @@ def output_ref_alt_gt(
     if any([(not z.is_rediscovery_file) for z in ref_alt_gt_files]):
         overall_counts['Pass QC'] += 1
         out_files['all'].write(out_str)
+        if is_unique and not indel_present:
+            out_files['unique'].write(out_str)
         if percent_present == 100:
             overall_counts['All agree'] += 1
         else:
             overall_counts['Conflicts'] += 1
             if multiple_variants:
                 overall_counts['Conflicts multiple'] += 1
-                if True in [
-                    v.curr_rec.is_indel for v in vcf_file_objs if
-                    v.has_curr_variant != 'absent'
-                ]:
+                if indel_present:
                     overall_counts['Conflicts multiple indel'] += 1
                 else:
                     overall_counts['Conflicts multiple no indel'] += 1
@@ -1072,6 +1108,16 @@ def ts_tv_ratio(counts):
     return divide(
         sum([counts[x] for x in ts]), sum([counts[y] for y in tv]), -1.0
     )
+
+
+def read_in_vars(in_f):
+    vars_to_analyze = set()  # set of tuples
+    for row in in_f:
+        row = row.split('\t')
+        chr_ = row[0]
+        pos = row[1]
+        vars_to_analyze.add((chr_, pos))
+    return vars_to_analyze
 
 
 if __name__ == '__main__':
