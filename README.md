@@ -20,7 +20,7 @@ PyVCF (https://github.com/jamescasbon/PyVCF)
 
 matplotlib (http://matplotlib.org/)
 
-##Example commands:
+##Example commands
 
 python vcf_compare.py a.vcf b.vcf --out_stats c.html --out_all_variants
 d.txt --out_absent e.txt --out_multiple f.txt --min_qd 5 --min_qual 100
