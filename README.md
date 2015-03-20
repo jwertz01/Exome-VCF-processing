@@ -29,8 +29,7 @@ d.txt --out_absent e.txt --out_multiple f.txt --min_qd 5 --min_qual 100
 python vcf_compare_inheritance.py -p1 a.vcf -p2 b.vcf -c c.vcf
 --out_stats d.html --out_all_variants e.txt --min_qd 5 --min_qual 100
 --min_dp 20
-
-(where c is the child in a trio, p1 is Parent 1 and p2 is Parent 2)
+(Where c is the child in a trio, p1 is Parent 1 and p2 is Parent 2.)
 
 ##Contact
 Julie Wertz (julie-wertz@uiowa.edu)
