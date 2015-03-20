@@ -70,9 +70,11 @@ def main():
     ]
     for f_name in args.rediscovery_files:
         counts_per_file_categs.append(
-            'Rediscovery rate (non-indels): %s' % f_name
+            'Rediscovery rate<br />(SNPs only): %s' % f_name
         )
-        counts_per_file_categs.append('rediscovery_count_%s' % f_name)
+        counts_per_file_categs.append(
+            'Rediscovery count (SNPs only): %s' % f_name
+        )
 
     # Categories displayed in flowchart in HTML file
     overall_counts_categs = [
@@ -178,9 +180,11 @@ def main():
         )
         for y in [z for z in vcf_file_objs if z.is_rediscovery_file]:
             v.counts[
-                'Rediscovery rate (non-indels): %s' % y.file_name
+                'Rediscovery rate<br />(SNPs only): %s' % y.file_name
             ] = divide(
-                v.counts['rediscovery_count_%s' % y.file_name],
+                v.counts[
+                    'Rediscovery count (SNPs only): %s' % y.file_name
+                ],
                 v.counts['SNP'], -1
             )
         v.counts['Transitions/ transversions'] = ts_tv_ratio(v.counts)
@@ -222,7 +226,10 @@ def main():
         ]
         for f_name in args.rediscovery_files:
             categs_post_filter_1.append(
-                'Rediscovery rate (non-indels): %s' % f_name
+                'Rediscovery count (SNPs only): %s' % f_name
+            )
+            categs_post_filter_1.append(
+                'Rediscovery rate<br />(SNPs only): %s' % f_name
             )
 
         # per unique combination of CHROM, POS, REF, ALT, GT
@@ -484,7 +491,8 @@ def compare_variants(
                                     not record.is_indel
                                 ):
                                     v.counts[
-                                        'rediscovery_count_%s' % y.file_name
+                                        'Rediscovery count (SNPs only): '
+                                        '%s' % y.file_name
                                     ] += 1
                         else:
                             v.has_curr_variant = 'low_qual'
