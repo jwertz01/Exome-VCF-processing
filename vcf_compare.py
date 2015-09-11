@@ -43,6 +43,14 @@ class VcfFile(object):
 def main():
     parser = argparse.ArgumentParser()
     args = parse_arguments(parser)
+    if args.out_dir is not None:
+        if not os.path.isdir(args.out_dir):
+            os.mkdir(args.out_dir)
+        for x in args.__dict__:
+            if 'out' in x and x != 'out_dir':
+                args.__dict__[x] = os.path.join(
+                    args.out_dir, args.__dict__[x]
+                )
     args.min_qc_values = {
         'dp': args.min_dp, 'qd': args.min_qd, 'qual': args.min_qual
     }
@@ -314,6 +322,11 @@ def parse_arguments(parser):
         help='Names of VCF files to be used for '
              'calculating rediscovery rate. (Default: Does not '
              'calculate rediscovery rate.)'
+    )
+    parser.add_argument(
+        '--out_dir',
+        help='Directory in which to place all output files. Default: '
+             'current directory.'
     )
     parser.add_argument(
         '--out_stats', default='vcf_stats.html',
