@@ -107,7 +107,7 @@ def validate(args, parser):
     """Validate command line arguments."""
     message = ''
     for x in args.vcf_file_names + args.rediscovery_files:
-        message += check_extension(x, '.vcf')
+        message += check_extension(x, '.vcf|.vcf.gz')
     message += check_extension(args.out_stats, '.html')
     message += check_extension(args.out_all_variants, '.txt')
     if message != '':  # Error has occurred
@@ -117,9 +117,10 @@ def validate(args, parser):
 
 def check_extension(filename, extension):
     """Return error string if wrong extension."""
-    if not filename.endswith(extension):
+    extension = extension.split('|')
+    if not any([filename.endswith(z) for z in extension]):
         return 'File "%s" does not have %s extension. ' % (
-            filename, extension
+            filename, ' or '.join(extension)
         )
     else:
         return ''
@@ -151,7 +152,7 @@ def initialize_files(
         counts_per_file_categs.append('rediscovery_count_%s' % f_name)
 
     for f_name in args.vcf_file_names + args.rediscovery_files:
-        in_f = open(f_name)
+        in_f = open(f_name)  # note vcf can be compressed
         reader = vcf.Reader(in_f)
         f_base_name = os.path.basename(f_name)
         if len(reader.samples) > 1:
@@ -221,7 +222,15 @@ def compare_variants(vcf_file_objs, args, out_all):
                 parse_chromosome(record.CHROM) == parse_chromosome(min_chrom)
                 and record.POS == min_pos and not v.eof
             ):
-                if call:
+                if (
+                    (call == None) or
+                    ('GT' not in dir(call.data)) or
+                    (call['GT'] == r'./.') or
+                    ('AD' not in dir(call.data)) or
+                    (call['AD'] == None)
+                ):  #all the ways GATK made a call with no real info
+                    v.has_curr_variant = 'absent'
+                elif call:
                     assign_qc_values(v.curr_qc_values, record, call)
                     update_counts_all(v.counts, v.curr_qc_values)
                     is_high_qual = record.FILTER != ['LowQual']
@@ -375,8 +384,11 @@ def process_variant(vcf_file_objs, args, out_all):
             record = v.curr_rec
             ref = str(record.REF)
             alt = str(record.ALT[0])
-            gt = call['GT']
-
+            gt = 'NA'
+            try:
+                gt = call['GT']
+            except (KeyError, AttributeError):
+                pass
             if (ref, alt, gt) in files_per_variant:
                 files_per_variant[(ref, alt, gt)].append(v)
             else:
@@ -478,7 +490,7 @@ def min_chromosome(chroms):
     """Args: Chromosome names ['chrN', 'chrP', ...]. Return name of
     chromosome which would appear first in ordered file.
     """
-    alpha_chrom_order = ['X', 'Y', 'U', 'M']
+    alpha_chrom_order = ['X', 'Y', 'U', 'M', 'G']
     chroms_list = list(chroms)
     for i in xrange(len(chroms_list)):
         chroms_list[i] = parse_chromosome(chroms_list[i])
