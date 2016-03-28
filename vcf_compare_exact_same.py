@@ -107,20 +107,19 @@ def validate(args, parser):
     """Validate command line arguments."""
     message = ''
     for x in args.vcf_file_names + args.rediscovery_files:
-        message += check_extension(x, '.vcf|.vcf.gz')
-    message += check_extension(args.out_stats, '.html')
-    message += check_extension(args.out_all_variants, '.txt')
+        message += check_extension(x, ['.vcf', '.vcf.gz'])
+    message += check_extension(args.out_stats, ['.html'])
+    message += check_extension(args.out_all_variants, ['.txt'])
     if message != '':  # Error has occurred
         parser.print_help()
         raise ValueError(message[:-1])
 
 
-def check_extension(filename, extension):
+def check_extension(filename, possible_extensions):
     """Return error string if wrong extension."""
-    extension = extension.split('|')
-    if not any([filename.endswith(z) for z in extension]):
+    if not any([filename.endswith(z) for z in possible_extensions]):
         return 'File "%s" does not have %s extension. ' % (
-            filename, ' or '.join(extension)
+            filename, ' or '.join(possible_extensions)
         )
     else:
         return ''
